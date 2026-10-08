@@ -238,7 +238,9 @@
     "imageUnreadable": "{name} could not be read as an image.",
     "packInstalled": "“{name}” was installed.",
     "copied": "Copied to the clipboard",
-    "selectionEmpty": "That layer has no pixels to select."
+    "selectionEmpty": "That layer has no pixels to select.",
+    "reloaded": "Reloaded after a change on disk",
+    "externalChangeKept": "That project changed on disk. Your unsaved edits were kept."
   },
   "error": {
     "invalid": "This is not a valid Compositor project, or its metadata is damaged.",
@@ -287,7 +289,8 @@
       "guideAxis": "A guide's axis is neither horizontal nor vertical.",
       "assetFileName": "An asset must be named after its layer.",
       "assetNotDeclared": "The document does not name that asset."
-    }
+    },
+    "watchUnavailable": "Changes to this project cannot be watched: {message}"
   },
   "tab": {
     "unsaved": "Unsaved changes",

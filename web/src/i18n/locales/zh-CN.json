@@ -238,7 +238,9 @@
     "imageUnreadable": "无法将 {name} 作为图像读取。",
     "packInstalled": "“{name}”已安装。",
     "copied": "已复制到剪贴板",
-    "selectionEmpty": "该图层没有可选择的像素。"
+    "selectionEmpty": "该图层没有可选择的像素。",
+    "reloaded": "文件已在磁盘上变更，已重新载入",
+    "externalChangeKept": "该工程已在磁盘上变更。你未保存的修改已保留。"
   },
   "error": {
     "invalid": "这不是有效的 Compositor 工程，或其中的元数据已损坏。",
@@ -287,7 +289,8 @@
       "guideAxis": "参考线的方向既不是水平也不是垂直。",
       "assetFileName": "资源文件必须以所属图层命名。",
       "assetNotDeclared": "文档中未声明该资源。"
-    }
+    },
+    "watchUnavailable": "无法监视该工程的变更：{message}"
   },
   "tab": {
     "unsaved": "未保存的更改",

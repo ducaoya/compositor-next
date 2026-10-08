@@ -419,6 +419,7 @@ export function useSession() {
     patchEffect,
     setEffectEnabled,
     flushEffects,
+    watchProject,
   }
 }
 
@@ -646,6 +647,106 @@ async function decodeAssets(opened: OpenedProject, target: Compositor): Promise<
   await Promise.all(jobs)
 }
 
+/**
+ * Re-reads a project that changed on disk, keeping the view and the selection.
+ *
+ * A reload clears the undo history, exactly as reopening a file does — the states in it describe a
+ * document that no longer exists. Unsaved edits win: a reload never silently discards someone's
+ * work, it says so and leaves them alone.
+ */
+async function reloadFromDisk(): Promise<void> {
+  const opened = project.value
+  if (!opened?.path) return
+  if (dirty.value) {
+    message.value = t('message.externalChangeKept')
+    return
+  }
+  try {
+    const client = await backend()
+    const fresh = await client.openProjectAt(opened.path)
+    const target = compositor.value
+    // Everything the old document held goes, so a layer that was deleted on disk does not linger
+    // as a texture nothing refers to.
+    const touched = new Set<string>([
+      ...opened.manifest.layers.map((layer) => layer.id),
+      ...fresh.manifest.layers.map((layer) => layer.id),
+    ])
+    for (const id of touched) {
+      for (const kind of ['image', 'mask'] as const) {
+        target?.disposeLayerTexture(assetKey(id, kind))
+        textures.delete(assetKey(id, kind))
+        paintStore.dispose(id, kind)
+      }
+      target?.disposeLayerTexture(`effect|${id}`)
+      effectTextures.delete(id)
+      effectRasters.delete(id)
+      layerImages.delete(id)
+      modifiedSurfaces.delete(assetKey(id, 'image'))
+      modifiedSurfaces.delete(assetKey(id, 'mask'))
+      surfaceVersion.delete(assetKey(id, 'image'))
+      surfaceVersion.delete(assetKey(id, 'mask'))
+    }
+
+    const keptView = { zoom: view.zoom, panX: view.panX, panY: view.panY }
+    project.value = fresh
+    manifest.value = fresh.manifest
+    history.clear()
+    bumpHistory()
+    dirty.value = false
+    if (!fresh.manifest.layers.some((layer) => layer.id === activeLayerId.value)) {
+      activeLayerId.value = fresh.manifest.activeLayerID ?? fresh.manifest.layers.at(-1)?.id ?? null
+      selectedIds.value = activeLayerId.value ? [activeLayerId.value] : []
+    }
+    view.zoom = keptView.zoom
+    view.panX = keptView.panX
+    view.panY = keptView.panY
+    target?.setDocumentSize(fresh.manifest.width, fresh.manifest.height)
+    if (target) await decodeAssets(fresh, target)
+    effectsVersion.value += 1
+    message.value = t('message.reloaded')
+  } catch (error) {
+    message.value = translateError(error)
+  }
+}
+
+let reloadTimer: ReturnType<typeof setTimeout> | null = null
+
+/** A save touches a dozen files; one reload per dozen events is what this is for. */
+function scheduleReload(): void {
+  if (reloadTimer) clearTimeout(reloadTimer)
+  reloadTimer = setTimeout(() => {
+    reloadTimer = null
+    void reloadFromDisk()
+  }, 300)
+}
+
+let watchBound = false
+
+/**
+ * Asks the shell to watch the open project, and listens for what it reports.
+ *
+ * A `.comp` is a folder of files precisely so that other things can write it, and this is what
+ * makes that visible: an agent, a sync client or a git checkout changes the project and the canvas
+ * redraws.
+ */
+async function watchProject(): Promise<void> {
+  if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return
+  const opened = project.value
+  if (!opened?.path) return
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    if (!watchBound) {
+      watchBound = true
+      const { listen } = await import('@tauri-apps/api/event')
+      await listen('project:changed', () => scheduleReload())
+    }
+    await invoke('watch_project', { id: opened.path, path: opened.path, enabled: true })
+  } catch (error) {
+    // A project that cannot be watched still opens; it just will not notice outside changes.
+    console.warn('this project cannot be watched', error)
+  }
+}
+
 async function adopt(opened: OpenedProject): Promise<void> {
   project.value = opened
   manifest.value = opened.manifest
@@ -672,6 +773,7 @@ async function adopt(opened: OpenedProject): Promise<void> {
     await decodeAssets(opened, target)
   }
   fit()
+  await watchProject()
 }
 
 export async function openProject(): Promise<void> {
@@ -2547,6 +2649,8 @@ if (typeof window !== 'undefined') {
       undo,
       redo,
       flushPaint,
+      reloadFromDisk,
+      watchProject,
     },
     configurable: true,
   })

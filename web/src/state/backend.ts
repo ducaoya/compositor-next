@@ -59,6 +59,8 @@ export interface Backend {
   /** False in the browser: there is nowhere to write a project. */
   readonly writable: boolean
   openProject(): Promise<OpenedProject | null>
+  /** Re-reads a project that is already open, for a reload after an outside change. */
+  openProjectAt(path: string): Promise<OpenedProject>
   createProject(width: number, height: number): Promise<OpenedProject | null>
   saveProject(project: OpenedProject, manifest: Manifest, bytes: AssetBytes): Promise<OpenedProject>
   /** Shows a picker and returns whatever the user chose, or nothing. */
@@ -141,6 +143,11 @@ async function tauriBackend(): Promise<Backend> {
       })
       if (!chosen) return null
       const path = typeof chosen === 'string' ? chosen : chosen[0]
+      const raw = await invoke<RawProject>('open_project', { path })
+      return toOpened(raw)
+    },
+
+    async openProjectAt(path) {
       const raw = await invoke<RawProject>('open_project', { path })
       return toOpened(raw)
     },
@@ -394,7 +401,8 @@ async function demoProject(): Promise<OpenedProject> {
     url: URL.createObjectURL(maskBlob),
   })
 
-  return { path: '', manifest, assets }
+  // A path, so the reload path has something to reload from. A browser has no folder behind it.
+  return { path: 'demo.comp', manifest, assets }
 }
 
 /** Browser canvas blobs are made synchronously at module scope, so this is a promise for shape. */
@@ -412,6 +420,12 @@ function browserBackend(): Backend {
       // The manifest is cloned on every open. Handing back the same object would mean editing a
       // document and reopening it showed the edits still applied, which is not what reopening a
       // file does anywhere else.
+      current ??= await demoProject()
+      return { ...current, manifest: structuredClone(current.manifest) }
+    },
+
+    async openProjectAt() {
+      // A browser has no files to watch, so this is only ever reached from a reload.
       current ??= await demoProject()
       return { ...current, manifest: structuredClone(current.manifest) }
     },

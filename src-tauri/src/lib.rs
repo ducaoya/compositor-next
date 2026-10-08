@@ -16,8 +16,10 @@
 
 mod commands;
 mod state;
+mod watcher;
 
 pub use state::SaveSessions;
+pub use watcher::Watchers;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -25,6 +27,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(SaveSessions::default())
+        .manage(Watchers::default())
         .invoke_handler(tauri::generate_handler![
             commands::open_project,
             commands::create_project,
@@ -40,6 +43,7 @@ pub fn run() {
             commands::list_language_packs,
             commands::install_language_pack,
             commands::open_language_folder,
+            watcher::watch_project,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

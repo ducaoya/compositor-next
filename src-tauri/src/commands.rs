@@ -34,7 +34,7 @@ pub struct CommandError {
 }
 
 impl CommandError {
-    fn new(key: impl Into<String>, fallback: impl Into<String>) -> Self {
+    pub(crate) fn new(key: impl Into<String>, fallback: impl Into<String>) -> Self {
         Self { key: key.into(), params: serde_json::json!({}), fallback: fallback.into() }
     }
 }
