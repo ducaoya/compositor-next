@@ -1,0 +1,48 @@
+# Notice
+
+This project is a derivative work of
+[robbietilton/Compositor](https://github.com/robbietilton/Compositor), which is distributed under the
+MIT License, Copyright (c) 2026 Wonder Assembly LLC.
+
+Its notice is reproduced below in full, as its terms require: *"The above copyright notice and this
+permission notice shall be included in all copies or substantial portions of the Software."*
+
+Nothing here is a copy of that project's source — this is a different language, a different UI
+toolkit and a different rendering stack. What was derived from it is the design:
+
+- the `.comp` project format — its schema, version history, validation rules and limits;
+- the 24 blend-mode formulas, and the choice to blend in sRGB rather than linear light;
+- the twelve adjustment formulas: Levels, the shape-preserving Curves interpolation, Exposure in
+  linear light, the Black & White channel mixing, Colour Balance's tonal weights, and the
+  gradient-map and grain hashes;
+- the compositing model: pass-through folders, a folder's opacity multiplying into its children,
+  clipping masks as alpha links, and adjustments affecting what is composited below them;
+- Hue/Saturation's HSL maths and Photoshop's multiplicative saturation;
+- the interface, which imitates the original's and, behind it, Photoshop's.
+
+If you are the author of the original and would like anything here worded or attributed
+differently, please open an issue.
+
+---
+
+MIT License
+
+Copyright (c) 2026 Wonder Assembly LLC
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

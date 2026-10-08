@@ -11,7 +11,7 @@ macOS 和 Linux 上：用 Tauri 2 + Vue 3 + WebGPU + Rust，而不是 AppKit + C
 
 它读写原项目的 `.comp` 工程格式（版本 1–11），因此任一编辑器保存的工程都能在另一个里打开。
 
-**协议：MIT。** 本项目是衍生作品，原项目的版权声明已完整保留在 [LICENSE](LICENSE)。详见
+**协议：MIT。** 本项目是衍生作品，原项目的版权声明已完整保留在 [NOTICE](NOTICE)。详见
 [署名与协议](#署名与协议)。
 
 ## 功能
@@ -110,7 +110,7 @@ bug —— 记录在 [docs/architecture.md](docs/architecture.md)。
 
 **本项目是 [robbietilton/Compositor](https://github.com/robbietilton/Compositor) 的衍生作品**，
 该项目采用 MIT 协议，Copyright (c) 2026 Wonder Assembly LLC。按其条款要求，其版权声明已完整保留在
-[LICENSE](LICENSE)。
+[NOTICE](NOTICE)。
 
 这里没有任何一行是该项目的源码拷贝 —— 语言不同、UI 工具包不同、渲染栈也不同。从它那里推导来的是
 设计：
@@ -125,4 +125,4 @@ bug —— 记录在 [docs/architecture.md](docs/architecture.md)。
 
 如果你是原作者，希望这里的措辞或署名方式有所调整，请开 issue。
 
-本项目采用 **MIT 协议**发布，Copyright (c) 2026 ducaoya <ducaoya@gmail.com>。
+本项目采用 **MIT 协议**发布，Copyright (c) 2026 ducaoya <ducaoya@gmail.com>。原项目版权声明见 [NOTICE](NOTICE)。

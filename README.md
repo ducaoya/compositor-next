@@ -14,7 +14,7 @@ It reads and writes the original's `.comp` project format, versions 1–11, so a
 either editor opens in the other.
 
 **Licence: MIT.** This is a derivative work; the original's notice is preserved in
-[LICENSE](LICENSE). See [Attribution and licence](#attribution-and-licence).
+[NOTICE](NOTICE). See [Attribution and licence](#attribution-and-licence).
 
 ## What it does
 
@@ -126,7 +126,7 @@ the bugs found that way could not have been found any other way.
 
 **This project is a derivative work of
 [robbietilton/Compositor](https://github.com/robbietilton/Compositor)**, MIT licensed, Copyright (c)
-2026 Wonder Assembly LLC. Its notice is reproduced in [LICENSE](LICENSE), as its terms require.
+2026 Wonder Assembly LLC. Its notice is reproduced in [NOTICE](NOTICE), as its terms require.
 
 Nothing here is a copy of that project's source — it is a different language, a different UI toolkit
 and a different rendering stack. What was derived from it is the design:
