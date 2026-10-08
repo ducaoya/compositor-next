@@ -1,0 +1,4 @@
+# A half-downloaded RAW is not a fixture. The fetch script writes here.
+*.part
+*.tmp
+dl.log
