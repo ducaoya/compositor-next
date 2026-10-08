@@ -60,7 +60,13 @@
     "invertMask": "反相蒙版",
     "blurMask": "模糊蒙版",
     "featherMask": "羽化蒙版",
-    "layerEffects": "图层样式"
+    "layerEffects": "图层样式",
+    "commandPalette": "命令面板…",
+    "rulers": "标尺",
+    "grid": "网格",
+    "gridLarger": "网格：放大间距",
+    "gridSmaller": "网格：缩小间距",
+    "gridSubdivide": "网格：切换细分"
   },
   "tools": {
     "move": "移动",
@@ -439,5 +445,23 @@
     "inside": "内部",
     "position": "位置",
     "outside": "外部"
+  },
+  "view": {
+    "rulers": "标尺",
+    "grid": "网格",
+    "gridSettings": "网格设置…",
+    "spacing": "间距",
+    "subdivisions": "细分",
+    "apply": "应用"
+  },
+  "lasso": {
+    "freehand": "手绘",
+    "polygonal": "多边形",
+    "hint": "逐点单击，然后按回车闭合。"
+  },
+  "palette": {
+    "placeholder": "输入命令…",
+    "empty": "没有匹配的命令。",
+    "hint": "↑↓ 选择，回车执行"
   }
 }

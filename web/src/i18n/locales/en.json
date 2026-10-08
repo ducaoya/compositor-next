@@ -60,7 +60,13 @@
     "invertMask": "Invert Mask",
     "blurMask": "Blur Mask",
     "featherMask": "Feather Mask",
-    "layerEffects": "Layer Effects"
+    "layerEffects": "Layer Effects",
+    "commandPalette": "Command Palette…",
+    "rulers": "Rulers",
+    "grid": "Grid",
+    "gridLarger": "Grid: Larger",
+    "gridSmaller": "Grid: Smaller",
+    "gridSubdivide": "Grid: Cycle subdivisions"
   },
   "tools": {
     "move": "Move",
@@ -439,5 +445,23 @@
     "inside": "Inside",
     "position": "Position",
     "outside": "Outside"
+  },
+  "view": {
+    "rulers": "Rulers",
+    "grid": "Grid",
+    "gridSettings": "Grid Settings…",
+    "spacing": "Spacing",
+    "subdivisions": "Subdivisions",
+    "apply": "Apply"
+  },
+  "lasso": {
+    "freehand": "Freehand",
+    "polygonal": "Polygonal",
+    "hint": "Click each corner, then press Enter."
+  },
+  "palette": {
+    "placeholder": "Type a command…",
+    "empty": "No command matches.",
+    "hint": "↑↓ to choose, Return to run"
   }
 }

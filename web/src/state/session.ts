@@ -30,6 +30,7 @@ import {
   fullSelection,
   inverted,
   maskSelection,
+  polygonSelection,
   rectSelection,
   selectionContains,
   withMask,
@@ -222,6 +223,43 @@ const erasing = ref(false)
 const wandTolerance = ref(32)
 /** How a new selection joins the one already there. */
 const selectionMode = ref<SelectionMode>('new')
+/** Lasso: the freehand path, or a polygon built a click at a time. */
+const lassoPolygonal = ref(false)
+/** The polygon being built, in document coordinates. Empty when nothing is in progress. */
+const lassoPoints = ref<[number, number][]>([])
+/** View helpers. */
+const showsRulers = ref(true)
+const showsGrid = ref(false)
+const gridSpacing = ref(64)
+const gridSubdivisions = ref(4)
+const paletteOpen = ref(false)
+
+export function setGrid(patch: Partial<{ spacing: number; subdivisions: number }>): void {
+  if (patch.spacing !== undefined) gridSpacing.value = Math.max(4, Math.round(patch.spacing))
+  if (patch.subdivisions !== undefined) gridSubdivisions.value = Math.max(1, Math.round(patch.subdivisions))
+}
+
+export function addLassoPoint(x: number, y: number): void {
+  lassoPoints.value = [...lassoPoints.value, [x, y]]
+  if (lassoPoints.value.length >= 3) setSelection(polygonSelection(lassoPoints.value))
+}
+
+/** Closes the polygon, which is what the second click and Enter both do. */
+export function closeLasso(): void {
+  const points = lassoPoints.value
+  lassoPoints.value = []
+  if (points.length < 3) {
+    setSelection(null)
+    return
+  }
+  applySelectionMode(polygonSelection(points))
+}
+
+export function cancelLasso(): void {
+  lassoPoints.value = []
+  setSelection(null)
+}
+
 /** The gradient and shape tools' settings. */
 const gradient = reactive({
   kind: 'linear' as 'linear' | 'radial',
@@ -361,6 +399,17 @@ export function useSession() {
     loadMaskSelection,
     drawGradient,
     drawShape,
+    lassoPolygonal,
+    lassoPoints,
+    showsRulers,
+    showsGrid,
+    gridSpacing,
+    gridSubdivisions,
+    paletteOpen,
+    setGrid,
+    addLassoPoint,
+    closeLasso,
+    cancelLasso,
     effectsSheetOpen,
     effectsEditingKey,
     activeLayerEffects,
@@ -2457,6 +2506,9 @@ if (typeof window !== 'undefined') {
       selectTool,
       setForeground,
       nudgeActive,
+      get lassoPoints() {
+        return lassoPoints.value
+      },
       loadLayerSelection,
       loadMaskSelection,
       drawShape,

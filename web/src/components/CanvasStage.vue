@@ -26,8 +26,11 @@ import {
   endStroke,
   extendStroke,
   fit,
+  addLassoPoint,
   applyCrop,
   applySelectionMode,
+  cancelLasso,
+  closeLasso,
   drawGradient,
   drawShape,
   flushPaint,
@@ -61,8 +64,13 @@ const {
   brush,
   selection,
   cropRect,
-
   shape,
+  lassoPolygonal,
+  lassoPoints,
+  showsRulers,
+  showsGrid,
+  gridSpacing,
+  gridSubdivisions,
   wandTolerance,
   wandContiguous,
 } = useSession()
@@ -74,6 +82,75 @@ const dragGuides = ref<{ x: number[]; y: number[] }>({ x: [], y: [] })
 const dropActive = ref(false)
 /** The line a gradient or shape tool is dragging, for the preview it draws. */
 const previewDrag = ref<{ kind: string; from: [number, number]; to: [number, number] } | null>(null)
+
+/**
+ * The ticks of a ruler, in screen pixels, thinned out as the zoom drops.
+ *
+ * A tick every ten document pixels is unreadable when zoomed out and too sparse when zoomed in,
+ * so the step is the smallest power of ten that keeps them at least forty pixels apart.
+ */
+function ticks(length: number, pan: number): { at: number; label: string }[] {
+  const minimum = 40
+  let step = 1
+  while (step * view.zoom < minimum) step *= step === 1 ? 5 : 2
+  const first = Math.floor(-pan / view.zoom / step) * step
+  const out: { at: number; label: string }[] = []
+  for (let value = first; ; value += step) {
+    const at = value * view.zoom + pan
+    if (at > length) break
+    if (at >= 0) out.push({ at, label: String(value) })
+  }
+  return out
+}
+
+const horizontalTicks = computed(() => ticks(viewport.width / viewport.dpr, view.panX))
+const verticalTicks = computed(() => ticks(viewport.height / viewport.dpr, view.panY))
+
+/** The grid's lines, in screen pixels. */
+const gridLines = computed(() => {
+  if (!showsGrid.value || !manifest.value) return { lines: [] as number[][], minor: [] as number[][] }
+  const spacing = gridSpacing.value * view.zoom
+  const minorSpacing = spacing / Math.max(1, gridSubdivisions.value)
+  const width = viewport.width / viewport.dpr
+  const height = viewport.height / viewport.dpr
+  const lines: number[][] = []
+  const minor: number[][] = []
+  // Minor lines are dropped once they crowd together, which is what Photoshop does too.
+  const drawMinor = minorSpacing > 6
+  for (let i = 0; ; i += 1) {
+    const x = view.panX + i * spacing
+    if (x > width) break
+    if (x >= 0) lines.push([x, 0, x, height])
+    if (drawMinor) {
+      for (let j = 1; j < gridSubdivisions.value; j += 1) {
+        const mx = x + j * minorSpacing
+        if (mx >= 0 && mx <= width) minor.push([mx, 0, mx, height])
+      }
+    }
+  }
+  for (let i = 0; ; i += 1) {
+    const y = view.panY + i * spacing
+    if (y > height) break
+    if (y >= 0) lines.push([0, y, width, y])
+    if (drawMinor) {
+      for (let j = 1; j < gridSubdivisions.value; j += 1) {
+        const my = y + j * minorSpacing
+        if (my >= 0 && my <= height) minor.push([0, my, width, my])
+      }
+    }
+  }
+  return { lines, minor }
+})
+
+/** The polygon being built, as an SVG path in screen pixels. */
+const lassoPath = computed(() => {
+  const points = lassoPoints.value
+  if (points.length === 0) return ''
+  const screen = points.map(([x, y]) => [x * view.zoom + view.panX, y * view.zoom + view.panY])
+  const head = screen.map(([x, y], index) => `${index === 0 ? 'M' : 'L'}${x} ${y}`).join('')
+  const cursor = pointer.value
+  return cursor ? `${head}L${cursor[0]} ${cursor[1]}` : head
+})
 const trace = { mounts: 0, schedules: 0, renders: 0, skipped: [] as string[], errors: [] as string[] }
 if (typeof window !== 'undefined') {
   Object.defineProperty(window, '__stageTrace', { value: trace, configurable: true })
@@ -328,7 +405,14 @@ function onPointerDown(event: PointerEvent): void {
       return
     }
     case 'lasso': {
-      // A lasso is a marquee whose shape is the path the pointer took.
+      if (lassoPolygonal.value) {
+        // Polygonal: a click adds a corner and keeps its own path alive between presses, so a
+        // double-click can close it without a drag ever happening.
+        if (event.detail >= 2) closeLasso()
+        else addLassoPoint(dx, dy)
+        return
+      }
+      // Freehand: a marquee whose shape is the path the pointer took.
       drag = { kind: 'lasso', points: [[dx, dy]] }
       setSelection(null)
       return
@@ -634,6 +718,8 @@ function onKeyDown(event: KeyboardEvent): void {
     setSelection(null)
     drag = { kind: 'none' }
   }
+  if (event.key === 'Escape' && lassoPoints.value.length > 0) cancelLasso()
+  if (event.key === 'Enter' && lassoPoints.value.length >= 3) closeLasso()
   if (event.key === 'Enter' && cropRect.value && tool.value === 'crop') applyCrop()
 }
 
@@ -714,6 +800,25 @@ watch(
         <path v-if="selection" class="ants__over" :transform="`translate(${view.panX} ${view.panY}) scale(${view.zoom})`" :d="selectionOutline(selection, manifest?.width ?? 0, manifest?.height ?? 0)" />
       </g>
       <line
+        v-for="(line, index) in gridLines.minor"
+        :key="`gm${index}`"
+        class="grid-line grid-line--minor"
+        :x1="line[0]"
+        :y1="line[1]"
+        :x2="line[2]"
+        :y2="line[3]"
+      />
+      <line
+        v-for="(line, index) in gridLines.lines"
+        :key="`g${index}`"
+        class="grid-line"
+        :x1="line[0]"
+        :y1="line[1]"
+        :x2="line[2]"
+        :y2="line[3]"
+      />
+      <path v-if="lassoPath" class="lasso" :d="lassoPath" />
+      <line
         v-if="previewDrag"
         class="drag-line"
         :x1="previewDrag.from[0] * view.zoom + view.panX"
@@ -768,6 +873,20 @@ watch(
         height: `${brushCursor.size}px`,
       }"
     />
+
+    <template v-if="showsRulers">
+      <div class="ruler ruler--top">
+        <span v-for="tick in horizontalTicks" :key="`t${tick.at}`" class="ruler__tick" :style="{ left: `${tick.at}px` }">
+          {{ tick.label }}
+        </span>
+      </div>
+      <div class="ruler ruler--left">
+        <span v-for="tick in verticalTicks" :key="`l${tick.at}`" class="ruler__tick" :style="{ top: `${tick.at}px` }">
+          {{ tick.label }}
+        </span>
+      </div>
+      <div class="ruler__corner" />
+    </template>
 
     <div v-if="dropActive" class="stage__dropping">{{ t('canvas.dropHere') }}</div>
 
@@ -833,6 +952,81 @@ watch(
   to {
     stroke-dashoffset: -8;
   }
+}
+
+.grid-line {
+  stroke: rgb(120 170 230 / 35%);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.grid-line--minor {
+  stroke: rgb(120 170 230 / 18%);
+}
+
+.lasso {
+  fill: none;
+  stroke: #ffffff;
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Rulers sit over the canvas, in the corner Photoshop puts them. */
+.ruler {
+  position: absolute;
+  background: var(--ps-frame);
+  border: 0 solid var(--ps-line-hard);
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.ruler--top {
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 16px;
+  border-bottom-width: 1px;
+}
+
+.ruler--left {
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 16px;
+  border-right-width: 1px;
+}
+
+.ruler__corner {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 16px;
+  height: 16px;
+  background: var(--ps-frame);
+  border-right: 1px solid var(--ps-line-hard);
+  border-bottom: 1px solid var(--ps-line-hard);
+  pointer-events: none;
+}
+
+.ruler__tick {
+  position: absolute;
+  color: var(--ps-text-faint);
+  font-size: 8px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.ruler--top .ruler__tick {
+  top: 4px;
+  padding-left: 2px;
+  border-left: 1px solid var(--ps-text-faint);
+}
+
+.ruler--left .ruler__tick {
+  left: 2px;
+  border-top: 1px solid var(--ps-text-faint);
+  writing-mode: vertical-rl;
 }
 
 .drag-line {

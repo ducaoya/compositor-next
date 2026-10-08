@@ -14,6 +14,7 @@ import CanvasStage from './components/CanvasStage.vue'
 import LayersPanel from './components/LayersPanel.vue'
 import NewCanvasSheet from './components/NewCanvasSheet.vue'
 import DimensionSheet from './components/DimensionSheet.vue'
+import CommandPalette, { type Command } from './components/CommandPalette.vue'
 import EffectsSheet from './components/EffectsSheet.vue'
 import SelectionAmountSheet from './components/SelectionAmountSheet.vue'
 import OptionsBar from './components/OptionsBar.vue'
@@ -83,6 +84,12 @@ const {
   canMergeDown,
   cropRect,
   locales,
+  paletteOpen,
+  showsRulers,
+  showsGrid,
+  gridSpacing,
+  gridSubdivisions,
+  setGrid,
 } = useSession()
 
 interface MenuItem {
@@ -227,8 +234,16 @@ const menus = computed<Menu[]>(() => [
     items: [
       { label: t('menu.zoomIn'), shortcut: 'Ctrl++', run: () => zoomBy(1.25) },
       { label: t('menu.zoomOut'), shortcut: 'Ctrl+-', run: () => zoomBy(1 / 1.25) },
+      { label: t('menu.commandPalette'), shortcut: 'F', run: () => (paletteOpen.value = true) },
+      { label: '' },
       { label: t('menu.fitOnScreen'), shortcut: 'Ctrl+0', run: fit },
       { label: t('menu.actualPixels'), shortcut: 'Ctrl+1', run: () => zoomTo(1) },
+      { label: '' },
+      { label: t('menu.rulers'), run: () => (showsRulers.value = !showsRulers.value) },
+      { label: t('menu.grid'), run: () => (showsGrid.value = !showsGrid.value) },
+      { label: t('menu.gridLarger'), run: () => setGrid({ spacing: gridSpacing.value * 2 }) },
+      { label: t('menu.gridSmaller'), run: () => setGrid({ spacing: Math.max(4, gridSpacing.value / 2) }) },
+      { label: t('menu.gridSubdivide'), run: () => setGrid({ subdivisions: gridSubdivisions.value === 4 ? 2 : 4 }) },
     ],
   },
   {
@@ -236,6 +251,25 @@ const menus = computed<Menu[]>(() => [
     items: [{ label: t('menu.about'), enabled: () => false }],
   },
 ])
+
+/**
+ * The menu flattened into the palette's list.
+ *
+ * Built from `menus` rather than kept beside it, so a command added to the menu is in the palette
+ * without anyone remembering to add it twice.
+ */
+const commands = computed<Command[]>(() =>
+  menus.value.flatMap((menu) =>
+    menu.items
+      .filter((item) => item.label && !item.heading && item.run)
+      .map((item) => ({
+        group: menu.label,
+        label: item.label as string,
+        shortcut: item.shortcut,
+        run: item.run as () => void,
+      })),
+  ),
+)
 
 /** Whether the shell can reach the filesystem, which decides if a folder can be opened. */
 /** How many layers an operation would apply to, which decides what the merge item says. */
@@ -304,6 +338,11 @@ function onKeyDown(event: KeyboardEvent): void {
     return
   }
 
+  if (event.key.toLowerCase() === 'f' && !event.ctrlKey && !event.metaKey) {
+    event.preventDefault()
+    paletteOpen.value = true
+    return
+  }
   const upper = event.key.toUpperCase()
   if (SHORTCUT_CYCLES[upper]) {
     event.preventDefault()
@@ -429,6 +468,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown))
     <SelectionAmountSheet />
     <DimensionSheet />
     <EffectsSheet />
+    <CommandPalette :commands="commands" />
   </div>
 </template>
 

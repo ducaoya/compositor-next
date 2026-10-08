@@ -13,8 +13,18 @@ import { TOOLS_BY_ID } from '../model/tools'
 import { fit, importImages, useSession, zoomTo } from '../state/session'
 
 const { t } = useI18n()
-const { tool, brush, foreground, selection, wandTolerance, wandContiguous, selectionMode, gradient, shape } =
-  useSession()
+const {
+  tool,
+  brush,
+  foreground,
+  selection,
+  wandTolerance,
+  wandContiguous,
+  selectionMode,
+  gradient,
+  shape,
+  lassoPolygonal,
+} = useSession()
 
 const label = computed(() => {
   const definition = TOOLS_BY_ID.get(tool.value)
@@ -73,6 +83,12 @@ const MODES = [
           {{ entry.glyph }}
         </button>
       </div>
+      <label v-if="tool === 'lasso'" class="options__select">
+        <select v-model="lassoPolygonal">
+          <option :value="false">{{ t('lasso.freehand') }}</option>
+          <option :value="true">{{ t('lasso.polygonal') }}</option>
+        </select>
+      </label>
       <label class="options__number">
         {{ t('options.feather') }} <input type="number" value="0" disabled /> {{ t('common.px') }}
       </label>
