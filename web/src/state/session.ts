@@ -14,6 +14,26 @@ import { computed, markRaw, reactive, ref, shallowRef } from 'vue'
 import { EditHistory } from '../model/history'
 import * as doc from '../model/document'
 import {
+  applyPack,
+  availableLocales,
+  currentLocale,
+  isPackProblem,
+  setLocale,
+  t,
+  translateError,
+  validatePack,
+  type LocaleInfo,
+} from '../i18n'
+import {
+  ellipseSelection,
+  fullSelection,
+  inverted,
+  rectSelection,
+  selectionContains,
+  type Selection,
+} from '../model/selection'
+import { SHORTCUT_CYCLES, type ToolId } from '../model/tools'
+import {
   DEFAULT_LIMITS,
   blendModeOf,
   effectiveOpacity,
@@ -27,6 +47,7 @@ import {
   type Manifest,
 } from '../model/types'
 import { Compositor, type LayerDraw } from '../render/compositor'
+import { PaintStore, fillSurface, stampSegment, type BrushSettings, type LayerSurface } from '../render/paint'
 import {
   assetKey,
   backend,
@@ -56,6 +77,26 @@ const compositor = shallowRef<Compositor | null>(null)
 const canRender = ref(false)
 const canGPU = ref(true)
 const historyVersion = ref(0)
+
+// MARK: - Tools, colours and painting
+
+const tool = ref<ToolId>('move')
+const previousTool = ref<ToolId>('move')
+const foreground = reactive({ r: 235, g: 235, b: 235 })
+const background = reactive({ r: 255, g: 255, b: 255 })
+const brush = reactive<BrushSettings>({
+  size: 32,
+  hardness: 0.8,
+  opacity: 1,
+  flow: 1,
+  color: { r: 235, g: 235, b: 235 },
+})
+const selection = ref<Selection | null>(null)
+const paintStore = new PaintStore()
+/** Decoded pixel sizes, for mapping between layer pixels and the document. */
+const layerImages = reactive(new Map<string, { width: number; height: number }>())
+/** Which layers the brush changes colour with, so an erase uses the eraser tip. */
+const erasing = ref(false)
 
 // `structuredClone` refuses a Vue proxy, and the document is JSON by definition, so the history
 // snapshots are taken the same way the format serializes them.
@@ -131,12 +172,86 @@ export function useSession() {
     canRedo,
     undoLabel,
     redoLabel,
+    tool,
+    foreground,
+    background,
+    brush,
+    selection,
+    erasing,
+    locales,
+    locale,
   }
 }
 
 export function hasTexture(layerId: string, kind: 'image' | 'mask' = 'image'): boolean {
   return textures.has(assetKey(layerId, kind))
 }
+
+/** Which languages the picker offers, and which one is active. */
+const locales = ref<LocaleInfo[]>(availableLocales())
+const locale = ref(currentLocale())
+
+/**
+ * Loads the packs installed outside the app.
+ *
+ * Called at startup and whenever the user asks for a reload, so a pack dropped into the data
+ * folder by hand — or one just installed — takes effect without a restart.
+ */
+export async function loadLanguagePacks(): Promise<void> {
+  try {
+    const client = await backend()
+    for (const value of await client.listLanguagePacks()) {
+      const pack = validatePack(value)
+      // A pack that does not fit the shape is skipped rather than fatal: one broken file should not
+      // cost the user every other language.
+      if (!isPackProblem(pack)) applyPack(pack)
+    }
+  } catch (error) {
+    console.warn('language packs could not be listed', error)
+  }
+  locales.value = availableLocales()
+  locale.value = currentLocale()
+}
+
+/** Shows a picker, installs what is chosen, and switches to it. */
+export async function installLanguagePack(): Promise<void> {
+  await guard(async () => {
+    const client = await backend()
+    const value = await client.installLanguagePack()
+    if (!value) return
+    const pack = validatePack(value)
+    if (isPackProblem(pack)) {
+      message.value = t('language.installedError', { reason: pack.reason })
+      return
+    }
+    applyPack(pack)
+    locales.value = availableLocales()
+    locale.value = pack.locale
+    setLocale(pack.locale)
+    message.value = t('message.packInstalled', { name: pack.name })
+  })
+}
+
+export function chooseLocale(code: string): void {
+  setLocale(code)
+  locale.value = code
+}
+
+export async function openLanguageFolder(): Promise<void> {
+  await guard(async () => {
+    await (await backend()).openLanguageFolder()
+  })
+}
+
+export async function reloadLanguagePacks(): Promise<void> {
+  await guard(async () => {
+    await loadLanguagePacks()
+    message.value = t('language.reloaded')
+  })
+}
+
+/** Translates for template code that has no setup context, such as the menu model. */
+export { t as translate }
 
 // MARK: - History plumbing
 
@@ -165,6 +280,52 @@ function edit(label: string, body: (manifest: Manifest) => boolean | void): bool
     bumpHistory()
   }
   return true
+}
+
+/** The new-canvas size prompt, opened from the toolbar. */
+export const newCanvasPrompt = reactive({ open: false, width: 1920, height: 1080 })
+
+export function openNewCanvasPrompt(): void {
+  newCanvasPrompt.open = true
+}
+
+/** The colour a tool uses when it paints: the foreground well, kept in step with the brush. */
+export function setForeground(color: { r: number; g: number; b: number }): void {
+  foreground.r = color.r
+  foreground.g = color.g
+  foreground.b = color.b
+  brush.color = { ...color }
+}
+
+export function swapColors(): void {
+  const f = { r: foreground.r, g: foreground.g, b: foreground.b }
+  setForeground({ r: background.r, g: background.g, b: background.b })
+  background.r = f.r
+  background.g = f.g
+  background.b = f.b
+}
+
+export function resetColors(): void {
+  background.r = 255
+  background.g = 255
+  background.b = 255
+  setForeground({ r: 0, g: 0, b: 0 })
+}
+
+/** Picks a tool, remembering where Alt-tabbing back to it should return. */
+export function selectTool(id: ToolId): void {
+  if (tool.value === id) return
+  previousTool.value = tool.value
+  tool.value = id
+  erasing.value = id === 'eraser'
+}
+
+/** Cycles the tools that share a shortcut, as pressing the key repeatedly does in Photoshop. */
+export function cycleTool(shortcut: string): void {
+  const cycle = SHORTCUT_CYCLES[shortcut]
+  if (!cycle || cycle.length === 0) return
+  const at = cycle.indexOf(tool.value)
+  selectTool(cycle[(at + 1) % cycle.length])
 }
 
 /**
@@ -229,8 +390,16 @@ async function decodeAssets(opened: OpenedProject, target: Compositor): Promise<
       const response = await fetch(asset.url)
       const blob = await response.blob()
       const bitmap = await createImageBitmap(blob)
-      const texture = target.upload(assetKey(asset.layerId, asset.kind), bitmap, bitmap.width, bitmap.height)
-      textures.set(assetKey(asset.layerId, asset.kind), markRaw(texture))
+      const key = assetKey(asset.layerId, asset.kind)
+      const texture = target.setLayerTexture(key, bitmap, bitmap.width, bitmap.height)
+      textures.set(key, markRaw(texture))
+      if (asset.kind === 'image') {
+        layerImages.set(asset.layerId, { width: bitmap.width, height: bitmap.height })
+        // The paint surface is seeded from the same pixels the GPU got. Keeping the raster on the
+        // CPU as well is what makes the brush, the eyedropper and saving possible; it is also the
+        // one place this build holds a document's pixels twice.
+        paintStore.create(asset.layerId, bitmap, bitmap.width, bitmap.height)
+      }
       bitmap.close()
     } catch (error) {
       console.warn(`could not decode ${asset.name}`, error)
@@ -243,6 +412,9 @@ async function adopt(opened: OpenedProject): Promise<void> {
   project.value = opened
   manifest.value = opened.manifest
   textures.clear()
+  paintStore.clear()
+  layerImages.clear()
+  selection.value = null
   pendingBytes = new Map()
   history.clear()
   bumpHistory()
@@ -284,13 +456,13 @@ export async function saveProject(): Promise<void> {
   await guard(async () => {
     const client = await backend()
     if (!client.writable) {
-      message.value = 'This is a browser preview: nothing can be written to disk.'
+      message.value = t('message.browserPreview')
       return
     }
     project.value = await client.saveProject(opened, current, pendingBytes)
     pendingBytes = new Map()
     dirty.value = false
-    message.value = 'Saved'
+    message.value = t('message.saved')
   })
 }
 
@@ -512,6 +684,465 @@ export function toDocument(screenX: number, screenY: number): [number, number] {
   return [(screenX - view.panX) / view.zoom, (screenY - view.panY) / view.zoom]
 }
 
+// MARK: - Layer and document coordinates
+
+/** The image size a layer's own pixels have, which its transform places on the document. */
+export function layerPixelSize(layer: LayerRecord): { width: number; height: number } {
+  const known = layerImages.get(layer.id)
+  if (known) return known
+  const surface = paintStore.surface(layer.id)
+  if (surface) return { width: surface.width, height: surface.height }
+  return { width: Math.max(1, Math.round(layer.transform.size[0])), height: Math.max(1, Math.round(layer.transform.size[1])) }
+}
+
+/**
+ * How a layer's pixels land on the document, as a matrix.
+ *
+ * Layer pixel (0, 0) is the image's top-left; the transform puts that corner at `origin` and
+ * stretches the image to `size`, then rotates it about the centre and applies the flips. Building
+ * it as a matrix rather than as a point conversion means the selection clip can go through the
+ * same mapping, so a rotated or flipped layer hides nothing and paints in the right place.
+ */
+export function layerMatrix(layer: LayerRecord): DOMMatrix {
+  const { width, height } = layerPixelSize(layer)
+  const [w, h] = layer.transform.size
+  const [ox, oy] = layer.transform.origin
+  const matrix = new DOMMatrix()
+  matrix.translateSelf(ox + w / 2, oy + h / 2)
+  matrix.rotateSelf(layer.transform.rotation)
+  matrix.scaleSelf(w, h)
+  matrix.translateSelf(-0.5, -0.5)
+  matrix.translateSelf(layer.transform.flipX ? 1 : 0, layer.transform.flipY ? 1 : 0)
+  matrix.scaleSelf(layer.transform.flipX ? -1 : 1, layer.transform.flipY ? -1 : 1)
+  matrix.scaleSelf(1 / width, 1 / height)
+  return matrix
+}
+
+/** Where a document point lands in a layer's own pixels. */
+export function documentToLayer(layer: LayerRecord, x: number, y: number): [number, number] {
+  try {
+    const point = layerMatrix(layer).inverse().transformPoint(new DOMPoint(x, y))
+    return [point.x, point.y]
+  } catch {
+    return [x, y]
+  }
+}
+
+/** Document pixels per layer pixel, for scaling a brush tip onto the document. */
+export function layerPixelScale(layer: LayerRecord): number {
+  const { width, height } = layerPixelSize(layer)
+  const scaleX = layer.transform.size[0] / Math.max(width, 1)
+  const scaleY = layer.transform.size[1] / Math.max(height, 1)
+  return Math.max(1e-6, (scaleX + scaleY) / 2)
+}
+
+function currentSelectionClip(layer: LayerRecord): import('../render/paint').SelectionClip | null {
+  if (!selection.value || !manifest.value) return null
+  return {
+    selection: selection.value,
+    canvasWidth: manifest.value.width,
+    canvasHeight: manifest.value.height,
+    layerToDocument: layerMatrix(layer),
+  }
+}
+
+/** The layer a paint action works on: the active one, or null when it cannot be painted. */
+export function paintableLayer(): LayerRecord | null {
+  const layer = activeLayer.value
+  if (!layer) return null
+  if (isFolder(layer)) return null
+  if (layer.adjustment !== undefined) return null
+  return layer
+}
+
+/** The surface for a layer, made from its pixels if it does not have one yet. */
+export function ensureSurface(layer: LayerRecord): LayerSurface {
+  const { width, height } = layerPixelSize(layer)
+  return paintStore.ensure(layer.id, width, height)
+}
+
+// MARK: - Painting
+
+let strokeLayer: string | null = null
+let strokeLast: [number, number] | null = null
+let strokeSmoothed: [number, number] | null = null
+
+/** Alt on a brush turns it into the other one, as Photoshop's Option/Alt does. */
+function brushErasing(): boolean {
+  return tool.value === 'eraser'
+}
+
+export function beginStroke(x: number, y: number): void {
+  const layer = paintableLayer()
+  if (!layer) return
+  const surface = ensureSurface(layer)
+  const clip = currentSelectionClip(layer)
+  const [lx, ly] = documentToLayer(layer, x, y)
+  const radius = (brush.size / 2) / layerPixelScale(layer)
+
+  history.begin('Brush', manifest.value!)
+  // A layer that had no pixels now has some, which is what makes it save.
+  if (!layer.imageFile) layer.imageFile = doc.imageFileName(layer.id)
+  layerImages.set(layer.id, { width: surface.width, height: surface.height })
+
+  strokeLayer = layer.id
+  strokeLast = [lx, ly]
+  strokeSmoothed = [lx, ly]
+  surface.dirty = unionDirty(
+    surface.dirty,
+    stampSegment(surface, [lx, ly], [lx, ly], radius, brush, brushErasing(), clip),
+  )
+}
+
+export function extendStroke(x: number, y: number): void {
+  if (!strokeLayer || !strokeLast) return
+  const layer = manifest.value?.layers.find((record) => record.id === strokeLayer)
+  const surface = paintStore.surface(strokeLayer)
+  if (!layer || !surface) return
+
+  const [lx, ly] = documentToLayer(layer, x, y)
+  // Smoothing trails the pointer, which is what makes a hand-drawn edge look drawn rather than
+  // sampled: Photoshop calls the same knob Smoothing.
+  const smoothing = 0.35
+  const target: [number, number] = [
+    (strokeSmoothed?.[0] ?? lx) + (lx - (strokeSmoothed?.[0] ?? lx)) * (1 - smoothing),
+    (strokeSmoothed?.[1] ?? ly) + (ly - (strokeSmoothed?.[1] ?? ly)) * (1 - smoothing),
+  ]
+  strokeSmoothed = target
+
+  const radius = (brush.size / 2) / layerPixelScale(layer)
+  surface.dirty = unionDirty(
+    surface.dirty,
+    stampSegment(surface, strokeLast, target, radius, brush, brushErasing(), currentSelectionClip(layer)),
+  )
+  strokeLast = target
+}
+
+export function endStroke(): void {
+  strokeLayer = null
+  strokeLast = null
+  strokeSmoothed = null
+  if (history.isEditing) endEdit()
+  schedulePaintFlush()
+}
+
+function unionDirty(
+  a: import('../render/paint').DirtyRect | null,
+  b: import('../render/paint').DirtyRect | null,
+): import('../render/paint').DirtyRect | null {
+  if (!a) return b
+  if (!b) return a
+  const x = Math.min(a.x, b.x)
+  const y = Math.min(a.y, b.y)
+  return {
+    x,
+    y,
+    width: Math.max(a.x + a.width, b.x + b.width) - x,
+    height: Math.max(a.y + a.height, b.y + b.height) - y,
+  }
+}
+
+/** Floods the layer with a colour, or clears it when `color` is null. */
+export function fillLayer(color: { r: number; g: number; b: number } | null): void {
+  const layer = paintableLayer()
+  if (!layer) return
+  const surface = ensureSurface(layer)
+  edit(color ? 'Fill' : 'Clear', (current) => {
+    const record = current.layers.find((item) => item.id === layer.id)
+    if (!record) return false
+    if (!record.imageFile) record.imageFile = doc.imageFileName(record.id)
+    layerImages.set(record.id, { width: surface.width, height: surface.height })
+    fillSurface(surface, color, currentSelectionClip(record))
+    return true
+  })
+  schedulePaintFlush()
+}
+
+/** Reads the colour of the topmost layer under a document point. */
+export function pickColor(x: number, y: number): boolean {
+  const current = manifest.value
+  if (!current) return false
+  const byId = indexLayers(current)
+  const leaves = visibleLeaves(current.layers).filter(
+    (layer) => !isFolder(layer) && layer.isVisible !== false,
+  )
+  for (let index = leaves.length - 1; index >= 0; index -= 1) {
+    const layer = leaves[index]
+    void byId
+    const surface = paintStore.surface(layer.id)
+    if (!surface) continue
+    const [lx, ly] = documentToLayer(layer, x, y)
+    if (lx < 0 || ly < 0 || lx >= surface.width || ly >= surface.height) continue
+    const pixel = surface.context.getImageData(Math.floor(lx), Math.floor(ly), 1, 1).data
+    if (pixel[3] < 8) continue
+    setForeground({ r: pixel[0], g: pixel[1], b: pixel[2] })
+    return true
+  }
+  return false
+}
+
+// MARK: - Selections
+
+export function setSelection(next: Selection | null): void {
+  selection.value = next
+}
+
+export function selectAll(): void {
+  const current = manifest.value
+  if (!current) return
+  selection.value = fullSelection(current.width, current.height)
+}
+
+export function deselect(): void {
+  selection.value = null
+}
+
+export function invertSelection(): void {
+  if (!selection.value) return
+  selection.value = inverted(selection.value)
+}
+
+/** The selection a marquee drag describes. */
+export function marqueeSelection(
+  start: [number, number],
+  end: [number, number],
+  elliptical: boolean,
+): Selection | null {
+  const rect = rectSelection(start[0], start[1], end[0] - start[0], end[1] - start[1])
+  if (!rect) return null
+  return elliptical ? ellipseSelection(rect.x, rect.y, rect.width, rect.height) : rect
+}
+
+export function isSelected(x: number, y: number): boolean {
+  return selectionContains(selection.value, x, y)
+}
+
+// MARK: - Moving a layer
+
+export interface SnapResult {
+  x: number
+  y: number
+  guidesX: number[]
+  guidesY: number[]
+}
+
+/**
+ * Where a dragged layer lands, with the same edges Photoshop snaps: the canvas, its centre, and
+ * the other layers' edges and centres.
+ *
+ * `tolerance` is in document pixels and the caller divides the screen threshold by the zoom, so the
+ * pull feels the same at any magnification.
+ */
+export function snapMove(layer: LayerRecord, x: number, y: number, tolerance: number): SnapResult {
+  const current = manifest.value
+  const [width, height] = layer.transform.size
+  if (!current) return { x, y, guidesX: [], guidesY: [] }
+
+  const candidatesX: number[] = [0, current.width / 2, current.width]
+  const candidatesY: number[] = [0, current.height / 2, current.height]
+  for (const other of current.layers) {
+    if (other.id === layer.id || isFolder(other)) continue
+    const [ox, oy] = other.transform.origin
+    const [ow, oh] = other.transform.size
+    candidatesX.push(ox, ox + ow / 2, ox + ow)
+    candidatesY.push(oy, oy + oh / 2, oy + oh)
+  }
+
+  const edgesX = [x, x + width / 2, x + width]
+  const edgesY = [y, y + height / 2, y + height]
+  let bestX: { delta: number; line: number } | null = null
+  let bestY: { delta: number; line: number } | null = null
+
+  for (const candidate of candidatesX) {
+    for (const edge of edgesX) {
+      const delta = candidate - edge
+      if (Math.abs(delta) <= tolerance && (!bestX || Math.abs(delta) < Math.abs(bestX.delta))) {
+        bestX = { delta, line: candidate }
+      }
+    }
+  }
+  for (const candidate of candidatesY) {
+    for (const edge of edgesY) {
+      const delta = candidate - edge
+      if (Math.abs(delta) <= tolerance && (!bestY || Math.abs(delta) < Math.abs(bestY.delta))) {
+        bestY = { delta, line: candidate }
+      }
+    }
+  }
+
+  return {
+    x: bestX ? x + bestX.delta : x,
+    y: bestY ? y + bestY.delta : y,
+    guidesX: bestX ? [bestX.line] : [],
+    guidesY: bestY ? [bestY.line] : [],
+  }
+}
+
+/** Moves a layer by a document-space offset, inside one undo step. */
+export function moveLayerBy(id: string, dx: number, dy: number): void {
+  applyEdit((current) => {
+    const layer = current.layers.find((record) => record.id === id)
+    if (!layer) return
+    layer.transform.origin[0] += dx
+    layer.transform.origin[1] += dy
+  })
+}
+
+/** Sets a layer's origin, used once a drag finishes and the snap is known. */
+export function setLayerOrigin(id: string, x: number, y: number): void {
+  applyEdit((current) => {
+    const layer = current.layers.find((record) => record.id === id)
+    if (!layer) return
+    layer.transform.origin[0] = x
+    layer.transform.origin[1] = y
+  })
+}
+
+// MARK: - Paint uploads
+
+let flushScheduled = false
+
+/**
+ * Uploads the rectangles the brush touched.
+ *
+ * Only the changed region goes over the bus: a 4,000 × 4,000 layer costs a few hundred kilobytes
+ * per dab rather than sixty-four megabytes.
+ */
+export function flushPaint(): void {
+  const target = compositor.value
+  if (!target) return
+  for (const [layerId, surface] of paintStore.dirtySurfaces()) {
+    const rect = surface.dirty
+    if (!rect) continue
+    const key = assetKey(layerId, 'image')
+    const texture = target.setLayerTexture(key, surface.canvas, surface.width, surface.height, rect)
+    if (texture) textures.set(key, markRaw(texture))
+    layerImages.set(layerId, { width: surface.width, height: surface.height })
+    paintStore.markClean(surface)
+  }
+}
+
+function schedulePaintFlush(): void {
+  if (flushScheduled) return
+  flushScheduled = true
+  requestAnimationFrame(() => {
+    flushScheduled = false
+    flushPaint()
+  })
+}
+
+// MARK: - Import
+
+/** Adds an imported image as a new layer on top. */
+export async function addImageLayer(bitmap: ImageBitmap, name: string): Promise<void> {
+  const current = manifest.value
+  const target = compositor.value
+  if (!current) return
+  const layer = doc.createLayer({
+    name,
+    transform: doc.covering(bitmap.width, bitmap.height),
+    hasPixels: true,
+  })
+  layer.transform.origin = [
+    Math.round((current.width - bitmap.width) / 2),
+    Math.round((current.height - bitmap.height) / 2),
+  ]
+
+  edit(`Add ${name}`, (manifestNow) => {
+    doc.addLayer(manifestNow, layer)
+    return true
+  })
+  activeLayerId.value = layer.id
+  selectedIds.value = [layer.id]
+
+  layerImages.set(layer.id, { width: bitmap.width, height: bitmap.height })
+  const surface = paintStore.create(layer.id, bitmap, bitmap.width, bitmap.height)
+  surface.dirty = { x: 0, y: 0, width: bitmap.width, height: bitmap.height }
+  if (target) {
+    const texture = target.setLayerTexture(
+      assetKey(layer.id, 'image'),
+      surface.canvas,
+      surface.width,
+      surface.height,
+      surface.dirty,
+    )
+    if (texture) textures.set(assetKey(layer.id, 'image'), markRaw(texture))
+    paintStore.markClean(surface)
+  }
+  bitmap.close()
+}
+
+export async function importDroppedPaths(paths: readonly string[]): Promise<void> {
+  await importWhatever(async () => (await backend()).readFiles(paths))
+}
+
+/** Adds images the browser handed over directly, which is how a dropped file arrives there. */
+export async function importDroppedFiles(files: readonly File[]): Promise<void> {
+  await importWhatever(async () => files.map((file) => ({ name: file.name, blob: file })))
+}
+
+/** Opens a file picker and adds whatever is chosen as layers. */
+export async function importImages(): Promise<void> {
+  await importWhatever(async () => (await backend()).pickImages())
+}
+
+/**
+ * Adds each chosen image as a layer, making a project first if none is open.
+ *
+ * The first image decides the canvas when there is no document, which is what Photoshop does when
+ * you open a photograph with nothing else open.
+ */
+async function importWhatever(
+  choose: () => Promise<{ name: string; blob: Blob }[]>,
+): Promise<void> {
+  await guard(async () => {
+    const files = await choose()
+    if (files.length === 0) return
+    let first = true
+    for (const file of files) {
+      try {
+        if (first && !manifest.value) {
+          await newProjectFromImage(file.blob)
+          first = false
+        }
+        const bitmap = await createImageBitmap(file.blob)
+        await addImageLayer(bitmap, file.name.replace(/\.[^.]+$/, ''))
+      } catch (error) {
+        message.value = t('message.imageUnreadable', { name: file.name })
+        console.error(error)
+      }
+    }
+  })
+}
+
+async function newProjectFromImage(blob: Blob): Promise<void> {
+  const bitmap = await createImageBitmap(blob)
+  const width = bitmap.width
+  const height = bitmap.height
+  bitmap.close()
+  const opened = await (await backend()).createProject(width, height)
+  if (opened) await adopt(opened)
+}
+
+/**
+ * Tells the shell to hand dropped files to the app.
+ *
+ * Tauri reports a drop as a list of paths rather than as browser files, because the webview is told
+ * not to intercept them.
+ */
+export async function registerDropTarget(): Promise<void> {
+  if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) return
+  try {
+    const { getCurrentWebview } = await import('@tauri-apps/api/webview')
+    await getCurrentWebview().onDragDropEvent(async (event) => {
+      if (event.payload.type !== 'drop') return
+      await importDroppedPaths(event.payload.paths)
+    })
+  } catch (error) {
+    console.warn('drag and drop is unavailable', error)
+  }
+}
+
 // MARK: - Export
 
 export async function exportPNG(): Promise<void> {
@@ -575,7 +1206,7 @@ async function guard(work: () => Promise<void>): Promise<void> {
   try {
     await work()
   } catch (error) {
-    const text = error instanceof Error ? error.message : String(error)
+    const text = translateError(error)
     message.value = text
     try {
       await (await backend()).reportError(text)
@@ -610,9 +1241,31 @@ if (typeof window !== 'undefined') {
       get view() {
         return view
       },
+      get tool() {
+        return tool.value
+      },
+      get brush() {
+        return brush
+      },
+      get foreground() {
+        return foreground
+      },
+      get selection() {
+        return selection.value
+      },
+      get rows() {
+        return rows.value
+      },
       get compositor() {
         return compositor.value
       },
+      get paintSurfaces() {
+        return paintStore
+      },
+      selectTool,
+      selectAll,
+      deselect,
+      invertSelection,
       get message() {
         return message.value
       },
@@ -621,6 +1274,7 @@ if (typeof window !== 'undefined') {
       fit,
       undo,
       redo,
+      flushPaint,
     },
     configurable: true,
   })

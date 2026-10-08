@@ -34,8 +34,12 @@ pub fn run() {
             commands::commit_save,
             commands::abort_save,
             commands::write_file,
+            commands::read_file,
             commands::read_app_limits,
             commands::blend_modes,
+            commands::list_language_packs,
+            commands::install_language_pack,
+            commands::open_language_folder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,0 +1,63 @@
+{
+  "locale": "fr",
+  "name": "Français",
+  "englishName": "French",
+  "version": "0.1.0",
+  "authors": ["An example, not a complete translation"],
+  "messages": {
+    "common": {
+      "cancel": "Annuler",
+      "create": "Créer",
+      "working": "Traitement…"
+    },
+    "menu": {
+      "file": "Fichier",
+      "edit": "Édition",
+      "image": "Image",
+      "layer": "Calque",
+      "select": "Sélection",
+      "view": "Affichage",
+      "language": "Langue",
+      "help": "Aide",
+      "newProject": "Nouveau…",
+      "open": "Ouvrir…",
+      "save": "Enregistrer",
+      "undo": "Annuler",
+      "redo": "Rétablir"
+    },
+    "tools": {
+      "move": "Déplacement",
+      "brush": "Pinceau",
+      "eraser": "Gomme",
+      "hand": "Main",
+      "zoom": "Zoom"
+    },
+    "layers": {
+      "title": "Calques",
+      "blend": "Fusion",
+      "opacity": "Opacité"
+    },
+    "properties": {
+      "title": "Propriétés",
+      "name": "Nom",
+      "transform": "Transformation",
+      "masks": "Masques"
+    },
+    "status": {
+      "noDocument": "Aucun document",
+      "noSelection": "Aucune sélection"
+    },
+    "blendModes": {
+      "normal": "Normal",
+      "multiply": "Produit",
+      "screen": "Écran",
+      "overlay": "Incrustation",
+      "soft-light": "Lumière tamisée"
+    },
+    "sampling": {
+      "high-quality": "Haute qualité",
+      "smooth": "Lissé",
+      "nearest": "Plus proche"
+    }
+  }
+}

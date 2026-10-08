@@ -1,15 +1,60 @@
+/**
+ * The design tokens, following Photoshop's dark interface.
+ *
+ * Photoshop's chrome is three or four grays that never move: the application frame, the panels,
+ * the wells inside them, and the controls. Keeping them as variables rather than literals is what
+ * stops the interface drifting into twenty slightly different grays.
+ */
+
 :root {
+  /* Photoshop's dark theme, as close as the numbers get without sampling it. */
+  --ps-frame: #323232;
+  --ps-frame-dark: #262626;
+  --ps-panel: #383838;
+  --ps-panel-tab: #2d2d2d;
+  --ps-well: #282828;
+  --ps-well-sunken: #232323;
+  --ps-control: #444444;
+  --ps-control-hover: #525252;
+  --ps-control-active: #5c5c5c;
+  --ps-line: #4b4b4b;
+  --ps-line-soft: #414141;
+  --ps-line-hard: #1c1c1c;
+
+  --ps-text: #d8d8d8;
+  --ps-text-strong: #f0f0f0;
+  --ps-text-dim: #9a9a9a;
+  --ps-text-faint: #787878;
+
+  /* The blue Photoshop uses for a focused control, a selected row, and an accent button. */
+  --ps-accent: #2d8ceb;
+  --ps-accent-dim: #1f6fbe;
+  --ps-row-selected: #3d5875;
+  --ps-row-selected-inactive: #4a4a4a;
+
+  --ps-canvas: #323232;
+  --ps-canvas-edge: #1a1a1a;
+
+  --ps-checker-a: #ffffff;
+  --ps-checker-b: #cccccc;
+
+  /* The layer mask and alpha channel red Photoshop tints its mask thumbnails with. */
+  --ps-mask-tint: #d24a4a;
+
+  --ps-radius: 3px;
+  --ps-font: 11px;
+
   color-scheme: dark;
   font-family:
     'Segoe UI Variable Text',
     'Segoe UI',
     system-ui,
     -apple-system,
+    'Helvetica Neue',
     sans-serif;
-  font-size: 13px;
-  line-height: 1.5;
-  color: #d6d9df;
-  background: #1c1d21;
+  font-size: var(--ps-font);
+  color: var(--ps-text);
+  background: var(--ps-frame);
 }
 
 * {
@@ -25,28 +70,46 @@ body,
 
 body {
   overflow: hidden;
+  user-select: none;
 }
 
 button,
 input,
-select {
+select,
+textarea {
   font-family: inherit;
+  font-size: inherit;
+}
+
+input,
+textarea {
+  user-select: text;
 }
 
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #3c3f46;
-  border-radius: 5px;
+  background: #575757;
+  border: 3px solid transparent;
+  border-radius: 6px;
+  background-clip: content-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #4a4d55;
+  background: #6b6b6b;
+  background-clip: content-box;
 }
 
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: var(--ps-frame-dark);
+}
+
+/* Photoshop draws a 1px inset line at the top of a control group and a 1px highlight below it. */
+.ps-divider {
+  height: 1px;
+  background: var(--ps-line-hard);
+  box-shadow: 0 1px 0 rgb(255 255 255 / 6%);
 }

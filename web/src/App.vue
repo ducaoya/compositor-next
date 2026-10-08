@@ -1,50 +1,198 @@
 <script setup lang="ts">
 /**
- * The window: a command bar, the canvas, the layer stack and its properties.
+ * The window, arranged the way Photoshop arranges it: a menu bar, the options bar for the current
+ * tool, the tool rail down the left, the document with its tab, the panels on the right, and the
+ * status bar along the bottom.
  *
- * Keyboard handling lives here rather than in the canvas so that a shortcut works wherever focus
- * is — except while a text field has it, which is what Photoshop does too.
+ * Keyboard handling lives here rather than in the canvas so a shortcut works wherever focus is —
+ * except while a text field has it, which is what Photoshop does too.
  */
-import { onBeforeUnmount, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 import CanvasStage from './components/CanvasStage.vue'
 import LayersPanel from './components/LayersPanel.vue'
+import NewCanvasSheet from './components/NewCanvasSheet.vue'
+import OptionsBar from './components/OptionsBar.vue'
 import PropertiesPanel from './components/PropertiesPanel.vue'
 import StatusBar from './components/StatusBar.vue'
-import Toolbar from './components/Toolbar.vue'
+import ToolRail from './components/ToolRail.vue'
+import { SHORTCUT_CYCLES } from './model/tools'
 import {
   addBlankLayer,
+  addFolder,
+  cycleTool,
   deleteSelected,
+  deselect,
   duplicateSelected,
   exportPNG,
+  fillLayer,
   fit,
   groupSelected,
+  importImages,
+  chooseLocale,
+  installLanguagePack,
+  invertSelection,
+  loadLanguagePacks,
   moveActive,
+  newCanvasPrompt,
   openProject,
+  openLanguageFolder,
   redo,
+  reloadLanguagePacks,
   saveProject,
+  selectAll,
   undo,
   ungroupSelected,
+  useSession,
+  zoomBy,
   zoomTo,
 } from './state/session'
 
-const TOOLS = [
-  { label: 'Move', hint: 'V' },
-  { label: 'Marquee', hint: 'M' },
-  { label: 'Lasso', hint: 'L' },
-  { label: 'Magic', hint: 'W' },
-  { label: 'Crop', hint: 'C' },
-  { label: 'Brush', hint: 'B' },
-  { label: 'Eraser', hint: 'E' },
-  { label: 'Heal', hint: 'J' },
-  { label: 'Clone', hint: 'S' },
-  { label: 'Gradient', hint: 'G' },
-  { label: 'Shape', hint: 'U' },
-  { label: 'Type', hint: 'T' },
-  { label: 'Eyedropper', hint: 'I' },
-  { label: 'Hand', hint: 'H' },
-  { label: 'Zoom', hint: 'Z' },
-]
+const { t, locale } = useI18n()
+const { manifest, foreground, background, dirty, busy, locales } = useSession()
+
+interface MenuItem {
+  label?: string
+  shortcut?: string
+  run?: () => void
+  enabled?: () => boolean
+  /** A section title rather than something to click. */
+  heading?: boolean
+  /** Drawn with a tick when it is the current choice. */
+  checked?: () => boolean
+}
+
+interface Menu {
+  label: string
+  items: MenuItem[]
+}
+
+const openMenu = ref<number | null>(null)
+
+/**
+ * The menu, rebuilt whenever the language changes.
+ *
+ * A constant array would freeze whichever language happened to be active when the module was
+ * first evaluated, which is why this is a computed rather than a plain literal.
+ */
+const menus = computed<Menu[]>(() => [
+  {
+    label: t('menu.file'),
+    items: [
+      { label: t('menu.newProject'), shortcut: 'Ctrl+N', run: () => (newCanvasPrompt.open = true) },
+      { label: t('menu.open'), shortcut: 'Ctrl+O', run: () => void openProject() },
+      { label: t('menu.importImages'), run: () => void importImages() },
+      { label: '' },
+      {
+        label: t('menu.save'),
+        shortcut: 'Ctrl+S',
+        run: () => void saveProject(),
+        enabled: () => dirty.value,
+      },
+      { label: t('menu.exportPng'), shortcut: 'Ctrl+E', run: () => void exportPNG() },
+    ],
+  },
+  {
+    label: t('menu.edit'),
+    items: [
+      { label: t('menu.undo'), shortcut: 'Ctrl+Z', run: undo },
+      { label: t('menu.redo'), shortcut: 'Ctrl+Shift+Z', run: redo },
+      { label: '' },
+      { label: t('menu.fillForeground'), run: () => fillLayer({ ...foreground }) },
+      { label: t('menu.fillBackground'), run: () => fillLayer({ ...background }) },
+      { label: t('menu.clear'), shortcut: 'Delete', run: () => fillLayer(null) },
+      { label: '' },
+      { label: t('language.title'), heading: true },
+      ...locales.value.map((entry) => ({
+        label: entry.builtIn ? entry.name : `${entry.name} · ${t('language.installedBadge')}`,
+        checked: () => locale.value === entry.code,
+        run: () => chooseLocale(entry.code),
+      })),
+      { label: '' },
+      { label: t('language.install'), run: () => void installLanguagePack() },
+      {
+        label: t('language.openFolder'),
+        run: () => void openLanguageFolder(),
+        enabled: () => inTauri(),
+      },
+      { label: t('language.reload'), run: () => void reloadLanguagePacks() },
+    ],
+  },
+  {
+    label: t('menu.image'),
+    items: [
+      { label: t('menu.canvasSize'), enabled: () => false },
+      { label: t('menu.imageSize'), enabled: () => false },
+      { label: t('menu.trim'), enabled: () => false },
+    ],
+  },
+  {
+    label: t('menu.layer'),
+    items: [
+      { label: t('menu.newLayer'), shortcut: 'Ctrl+Shift+N', run: addBlankLayer },
+      { label: t('menu.newGroup'), run: addFolder },
+      { label: t('menu.duplicateLayer'), shortcut: 'Ctrl+J', run: duplicateSelected },
+      { label: '' },
+      { label: t('menu.groupLayers'), shortcut: 'Ctrl+G', run: groupSelected },
+      { label: t('menu.ungroupLayers'), shortcut: 'Ctrl+Shift+G', run: ungroupSelected },
+      { label: '' },
+      { label: t('menu.bringForward'), shortcut: 'Ctrl+]', run: () => moveActive(1) },
+      { label: t('menu.sendBackward'), shortcut: 'Ctrl+[', run: () => moveActive(-1) },
+      { label: '' },
+      { label: t('menu.deleteLayer'), run: deleteSelected },
+    ],
+  },
+  {
+    label: t('menu.select'),
+    items: [
+      { label: t('menu.selectAll'), shortcut: 'Ctrl+A', run: selectAll },
+      { label: t('menu.deselect'), shortcut: 'Ctrl+D', run: deselect },
+      { label: t('menu.inverse'), shortcut: 'Ctrl+Shift+I', run: invertSelection },
+    ],
+  },
+  {
+    label: t('menu.filter'),
+    items: [
+      { label: t('menu.gaussianBlur'), enabled: () => false },
+      { label: t('menu.addNoise'), enabled: () => false },
+      { label: t('menu.cameraRaw'), enabled: () => false },
+    ],
+  },
+  {
+    label: t('menu.view'),
+    items: [
+      { label: t('menu.zoomIn'), shortcut: 'Ctrl++', run: () => zoomBy(1.25) },
+      { label: t('menu.zoomOut'), shortcut: 'Ctrl+-', run: () => zoomBy(1 / 1.25) },
+      { label: t('menu.fitOnScreen'), shortcut: 'Ctrl+0', run: fit },
+      { label: t('menu.actualPixels'), shortcut: 'Ctrl+1', run: () => zoomTo(1) },
+    ],
+  },
+  {
+    label: t('menu.help'),
+    items: [{ label: t('menu.about'), enabled: () => false }],
+  },
+])
+
+/** Whether the shell can reach the filesystem, which decides if a folder can be opened. */
+function inTauri(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+}
+
+
+function toggleMenu(index: number): void {
+  openMenu.value = openMenu.value === index ? null : index
+}
+
+function hoverMenu(index: number): void {
+  if (openMenu.value !== null) openMenu.value = index
+}
+
+function runItem(item: MenuItem): void {
+  openMenu.value = null
+  if (item.enabled && !item.enabled()) return
+  item.run?.()
+}
 
 function isTextEntry(target: EventTarget | null): boolean {
   const element = target as HTMLElement | null
@@ -55,53 +203,49 @@ function isTextEntry(target: EventTarget | null): boolean {
 
 function onKeyDown(event: KeyboardEvent): void {
   if (isTextEntry(event.target)) return
-
-  if (event.ctrlKey || event.metaKey) {
-    switch (event.key.toLowerCase()) {
-      case 'z':
-        event.preventDefault()
-        if (event.shiftKey) redo()
-        else undo()
-        return
-      case 'y':
-        event.preventDefault()
-        redo()
-        return
-      case 's':
-        event.preventDefault()
-        void saveProject()
-        return
-      case 'o':
-        event.preventDefault()
-        void openProject()
-        return
-      case 'e':
-        event.preventDefault()
-        void exportPNG()
-        return
-      case '0':
-        event.preventDefault()
-        fit()
-        return
-      case '1':
-        event.preventDefault()
-        zoomTo(1)
-        return
-      case 'g':
-        event.preventDefault()
-        if (event.shiftKey) ungroupSelected()
-        else groupSelected()
-        return
-      case 'j':
-        event.preventDefault()
-        duplicateSelected()
-        return
-      default:
-        return
-    }
+  if (openMenu.value !== null && event.key === 'Escape') {
+    openMenu.value = null
+    return
   }
 
+  if (event.ctrlKey || event.metaKey) {
+    const key = event.key.toLowerCase()
+    const shift = event.shiftKey
+    const run = (work: () => void) => {
+      event.preventDefault()
+      work()
+    }
+    if (key === 'z') return run(shift ? redo : undo)
+    if (key === 's') return run(() => void saveProject())
+    if (key === 'o') return run(() => void openProject())
+    if (key === 'e') return run(() => void exportPNG())
+    if (key === 'a') return run(selectAll)
+    if (key === 'd') return run(deselect)
+    if (key === 'i' && shift) return run(invertSelection)
+    if (key === 'g') return run(shift ? ungroupSelected : groupSelected)
+    if (key === 'j') return run(duplicateSelected)
+    if (key === 'n' && shift) return run(addBlankLayer)
+    if (key === '0') return run(fit)
+    if (key === '1') return run(() => zoomTo(1))
+    if (key === ']') return run(() => moveActive(1))
+    if (key === '[') return run(() => moveActive(-1))
+    if (key === '=' || key === '+') return run(() => zoomBy(1.25))
+    if (key === '-') return run(() => zoomBy(1 / 1.25))
+    return
+  }
+
+  const upper = event.key.toUpperCase()
+  if (SHORTCUT_CYCLES[upper]) {
+    event.preventDefault()
+    cycleTool(upper)
+    return
+  }
   switch (event.key) {
+    case 'Delete':
+    case 'Backspace':
+      event.preventDefault()
+      fillLayer(null)
+      break
     case ']':
       event.preventDefault()
       moveActive(1)
@@ -110,52 +254,89 @@ function onKeyDown(event: KeyboardEvent): void {
       event.preventDefault()
       moveActive(-1)
       break
-    case 'Delete':
-    case 'Backspace':
-      event.preventDefault()
-      deleteSelected()
-      break
-    case 'Escape':
-      break
     default:
-      if (event.key.toLowerCase() === 'n' && event.shiftKey) {
-        event.preventDefault()
-        addBlankLayer()
-      }
+      break
   }
 }
 
-onMounted(() => window.addEventListener('keydown', onKeyDown))
+const documentName = computed(() => {
+  const path = useSession().project.value?.path
+  if (!path) return manifest.value ? 'Untitled.comp' : t('status.noDocument')
+  return path.split(/[\\/]/).pop() ?? 'Untitled.comp'
+})
+
+onMounted(() => {
+  void loadLanguagePacks()
+  window.addEventListener('keydown', onKeyDown)
+  window.addEventListener('click', () => (openMenu.value = null), { capture: false })
+})
 onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown))
 </script>
 
 <template>
   <div class="window">
-    <Toolbar />
-    <div class="window__body">
-      <nav class="rail">
-        <button
-          v-for="tool in TOOLS"
-          :key="tool.label"
-          class="rail__tool"
-          :disabled="tool.label !== 'Move'"
-          :title="tool.label !== 'Move' ? `${tool.label} — not in this build yet` : tool.label"
-        >
-          <span class="rail__label">{{ tool.label }}</span>
-          <span class="rail__hint">{{ tool.hint }}</span>
+    <nav class="menubar">
+      <span class="menubar__brand">Compositor</span>
+      <div
+        v-for="(menu, index) in menus"
+        :key="menu.label"
+        class="menubar__item"
+        :class="{ 'menubar__item--open': openMenu === index }"
+      >
+        <button class="menubar__button" @click.stop="toggleMenu(index)" @mouseenter="hoverMenu(index)">
+          {{ menu.label }}
         </button>
-      </nav>
+        <div v-if="openMenu === index" class="menu" @click.stop>
+          <template v-for="(item, itemIndex) in menu.items" :key="itemIndex">
+            <div v-if="!item.label" class="menu__sep" />
+            <div v-else-if="item.heading" class="menu__heading">{{ item.label }}</div>
+            <button
+              v-else
+              class="menu__item"
+              :class="{
+                'menu__item--off': item.enabled && !item.enabled(),
+                'menu__item--checked': item.checked && item.checked(),
+              }"
+              @click="runItem(item)"
+            >
+              <span class="menu__tick">{{ item.checked && item.checked() ? '✓' : '' }}</span>
+              <span class="menu__label">{{ item.label }}</span>
+              <span v-if="item.shortcut" class="menu__shortcut">{{ item.shortcut }}</span>
+            </button>
+          </template>
+        </div>
+      </div>
+      <span class="menubar__spacer" />
+      <span v-if="busy" class="menubar__busy">{{ t('common.working') }}</span>
+    </nav>
 
-      <main class="window__canvas">
+    <OptionsBar />
+
+    <div class="body">
+      <ToolRail />
+
+      <main class="doc">
+        <div class="doc__tabs">
+          <div class="tab" :class="{ 'tab--on': true }">
+            <span class="tab__icon">▣</span>
+            <span class="tab__name">{{ documentName }}</span>
+            <span v-if="dirty" class="tab__dot" :title="t('tab.unsaved')">•</span>
+          </div>
+          <button class="tab__new" :title="t('tab.newCanvas')" @click="newCanvasPrompt.open = true">+</button>
+        </div>
         <CanvasStage />
       </main>
 
-      <aside class="window__side">
-        <LayersPanel />
+      <aside class="panels">
+        <div class="panels__main">
+          <LayersPanel />
+        </div>
         <PropertiesPanel />
       </aside>
     </div>
+
     <StatusBar />
+    <NewCanvasSheet />
   </div>
 </template>
 
@@ -165,59 +346,208 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown))
   flex-direction: column;
   height: 100vh;
   overflow: hidden;
+  background: var(--ps-frame);
 }
 
-.window__body {
+/* Menu bar */
+.menubar {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 6px;
+  background: var(--ps-frame);
+  border-bottom: 1px solid var(--ps-line-hard);
+  font-size: 11px;
+}
+
+.menubar__brand {
+  padding-right: 10px;
+  color: var(--ps-text-faint);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.menubar__item {
+  position: relative;
+}
+
+.menubar__button {
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 2px;
+  background: none;
+  color: var(--ps-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.menubar__item--open .menubar__button,
+.menubar__button:hover {
+  background: var(--ps-control);
+}
+
+.menubar__spacer {
+  flex: 1;
+}
+
+.menubar__busy {
+  color: var(--ps-text-dim);
+}
+
+.menu {
+  position: absolute;
+  left: 0;
+  top: 22px;
+  z-index: 50;
+  min-width: 216px;
+  padding: 3px;
+  border: 1px solid var(--ps-line);
+  background: var(--ps-panel);
+  box-shadow: 0 8px 22px rgb(0 0 0 / 50%);
+}
+
+.menu__heading {
+  padding: 5px 8px 2px;
+  color: var(--ps-text-faint);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.menu__tick {
+  width: 12px;
+  color: #cfe4fb;
+}
+
+.menu__label {
+  flex: 1;
+}
+
+.menu__item--checked {
+  color: var(--ps-text-strong);
+}
+
+.menu__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 8px;
+  border: 0;
+  background: none;
+  color: var(--ps-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu__item:hover {
+  background: var(--ps-accent-dim);
+  color: #ffffff;
+}
+
+.menu__item--off {
+  color: var(--ps-text-faint);
+}
+
+.menu__item--off:hover {
+  background: none;
+  color: var(--ps-text-faint);
+}
+
+.menu__shortcut {
+  color: var(--ps-text-faint);
+}
+
+.menu__item:hover .menu__shortcut {
+  color: #dbe8f6;
+}
+
+.menu__sep {
+  height: 1px;
+  margin: 3px 4px;
+  background: var(--ps-line);
+}
+
+/* Body */
+.body {
   display: grid;
-  grid-template-columns: 52px minmax(0, 1fr) 300px;
+  grid-template-columns: 30px minmax(0, 1fr) 292px;
   flex: 1;
   min-height: 0;
 }
 
-.window__canvas {
-  position: relative;
+.doc {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
-}
-
-.window__side {
-  display: grid;
-  grid-template-rows: minmax(120px, 1fr) auto;
   min-height: 0;
-  border-left: 1px solid #33353a;
+  background: var(--ps-frame-dark);
 }
 
-.rail {
+.doc__tabs {
   display: flex;
-  flex-direction: column;
+  align-items: flex-end;
   gap: 2px;
-  padding: 6px 4px;
-  background: #2b2c31;
-  border-right: 1px solid #33353a;
-  overflow: auto;
+  height: 26px;
+  padding: 3px 4px 0;
+  background: var(--ps-frame-dark);
 }
 
-.rail__tool {
+.tab {
   display: flex;
-  flex-direction: column;
+  gap: 6px;
   align-items: center;
-  gap: 1px;
-  padding: 5px 2px;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  background: none;
-  color: #b6bbc3;
-  font: inherit;
+  max-width: 240px;
+  padding: 3px 10px;
+  border-radius: 3px 3px 0 0;
+  background: var(--ps-panel);
+  color: var(--ps-text);
+}
+
+.tab--on {
+  color: var(--ps-text-strong);
+}
+
+.tab__icon {
+  color: #9aa0a8;
   font-size: 10px;
+}
+
+.tab__name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tab__dot {
+  color: #e0b060;
+}
+
+.tab__new {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--ps-text-dim);
   cursor: pointer;
 }
 
-.rail__tool:disabled {
-  opacity: 0.4;
-  cursor: default;
+.tab__new:hover {
+  background: var(--ps-control);
+  color: var(--ps-text-strong);
 }
 
-.rail__hint {
-  color: #656b75;
-  font-size: 9px;
+.panels {
+  display: grid;
+  grid-template-rows: minmax(140px, 1fr) auto;
+  min-height: 0;
+  border-left: 1px solid var(--ps-line-hard);
+}
+
+.panels__main {
+  min-height: 0;
 }
 </style>

@@ -46,7 +46,7 @@ pub fn validate(manifest: &Manifest, limits: &Limits) -> Result<(), ProjectError
     let mut ids: HashSet<Uuid> = HashSet::new();
     for layer in &manifest.layers {
         if !ids.insert(layer.id) {
-            return Err(ProjectError::layer_rule(layer.id, "two layers share one id"));
+            return Err(ProjectError::layer_rule(layer.id, "duplicateLayerId"));
         }
     }
     let by_id: HashMap<Uuid, &crate::manifest::LayerRecord> =
@@ -59,28 +59,28 @@ pub fn validate(manifest: &Manifest, limits: &Limits) -> Result<(), ProjectError
         // Text layers: per-letter colors arrived in version 10, per-letter faces in version 11.
         if let Some(text) = &layer.text {
             if has_key(text, "colorRuns") && version < 10 {
-                return Err(ProjectError::layer_rule(id, "per-letter colors need format version 10"));
+                return Err(ProjectError::layer_rule(id, "textColorRunsVersion"));
             }
             if has_key(text, "fontRuns") && version < 11 {
-                return Err(ProjectError::layer_rule(id, "per-letter fonts need format version 11"));
+                return Err(ProjectError::layer_rule(id, "textFontRunsVersion"));
             }
             if layer.image_file.is_none() || folder || layer.adjustment.is_some() {
-                return Err(ProjectError::layer_rule(id, "a text layer needs pixels, and is neither a folder nor an adjustment"));
+                return Err(ProjectError::layer_rule(id, "textLayerShape"));
             }
         }
 
         // Adjustment layers arrived in version 7; the three that sample neighbors in version 9.
         if let Some(adjustment) = &layer.adjustment {
             if version < 7 {
-                return Err(ProjectError::layer_rule(id, "adjustment layers need format version 7"));
+                return Err(ProjectError::layer_rule(id, "adjustmentVersion"));
             }
             if folder || layer.image_file.is_some() {
-                return Err(ProjectError::layer_rule(id, "an adjustment layer has no pixels and is not a folder"));
+                return Err(ProjectError::layer_rule(id, "adjustmentHasNoPixels"));
             }
             let kind = adjustment.get("kind").and_then(|v| v.as_str()).unwrap_or_default();
             let needs_nine = matches!(kind, "Gaussian Blur" | "Motion Blur" | "Add Noise");
             if needs_nine && version < 9 {
-                return Err(ProjectError::layer_rule(id, "this adjustment needs format version 9"));
+                return Err(ProjectError::layer_rule(id, "adjustmentKindVersion"));
             }
         }
 
@@ -88,60 +88,60 @@ pub fn validate(manifest: &Manifest, limits: &Limits) -> Result<(), ProjectError
         if let Some(mask_file) = &layer.mask_file {
             let floor = if folder { 6 } else { 4 };
             if version < floor {
-                return Err(ProjectError::layer_rule(id, "layer masks need a newer format version"));
+                return Err(ProjectError::layer_rule(id, "maskVersion"));
             }
             if *mask_file != format!("{}.mask.png", upper(id)) {
-                return Err(ProjectError::layer_rule(id, "a mask file must be named after its layer"));
+                return Err(ProjectError::layer_rule(id, "maskFileName"));
             }
         } else if layer.mask_enabled.is_some() || layer.mask_placement.is_some() {
-            return Err(ProjectError::layer_rule(id, "a mask setting needs a mask file"));
+            return Err(ProjectError::layer_rule(id, "maskSettingWithoutFile"));
         }
         if let Some(placement) = layer.mask_placement {
             if !placement.is_valid() {
-                return Err(ProjectError::layer_rule(id, "the mask's placement is out of range"));
+                return Err(ProjectError::layer_rule(id, "maskPlacementRange"));
             }
         }
 
         let opacity = layer.opacity();
         let blend = layer.blend();
         if !opacity.is_finite() || !(0.0..=1.0).contains(&opacity) {
-            return Err(ProjectError::layer_rule(id, "opacity must be between 0 and 1"));
+            return Err(ProjectError::layer_rule(id, "opacityRange"));
         }
         // Folders took an opacity of their own in version 8, which multiplies into what is inside
         // them; their blend mode is pass-through, so it stays Normal.
         if folder {
             if blend != crate::manifest::BlendMode::Normal {
-                return Err(ProjectError::layer_rule(id, "a folder composites its contents, so its blend mode stays Normal"));
+                return Err(ProjectError::layer_rule(id, "folderBlendMode"));
             }
             if opacity != 1.0 && version < 8 {
-                return Err(ProjectError::layer_rule(id, "a folder's own opacity needs format version 8"));
+                return Err(ProjectError::layer_rule(id, "folderOpacityVersion"));
             }
         }
         if version < 3 && (opacity != 1.0 || blend != crate::manifest::BlendMode::Normal) {
-            return Err(ProjectError::layer_rule(id, "opacity and blend modes need format version 3"));
+            return Err(ProjectError::layer_rule(id, "appearanceVersion"));
         }
         if version < 5 && layer.mask_source_id.is_some() {
-            return Err(ProjectError::layer_rule(id, "clipping masks need format version 5"));
+            return Err(ProjectError::layer_rule(id, "clippingVersion"));
         }
 
         if !layer.transform.is_valid() {
-            return Err(ProjectError::layer_rule(id, "the layer's transform is out of range"));
+            return Err(ProjectError::layer_rule(id, "transformRange"));
         }
         if layer.name.trim().is_empty() {
-            return Err(ProjectError::layer_rule(id, "a layer needs a name"));
+            return Err(ProjectError::layer_rule(id, "layerNameMissing"));
         }
         if layer.name.len() > limits.max_name_bytes {
-            return Err(ProjectError::layer_rule(id, "the layer's name is too long"));
+            return Err(ProjectError::layer_rule(id, "layerNameTooLong"));
         }
         match &layer.image_file {
             Some(file) if file != &format!("{}.png", upper(id)) => {
-                return Err(ProjectError::layer_rule(id, "an image file must be named after its layer"));
+                return Err(ProjectError::layer_rule(id, "imageFileName"));
             }
             None if folder => {}
             _ => {}
         }
         if folder && layer.image_file.is_some() {
-            return Err(ProjectError::layer_rule(id, "a folder holds no pixels of its own"));
+            return Err(ProjectError::layer_rule(id, "folderHasPixels"));
         }
     }
 
@@ -169,11 +169,11 @@ fn validate_hierarchy(
         let mut parent = layer.parent_id;
         while let Some(id) = parent {
             if seen.len() > limits.max_nesting || !seen.insert(id) {
-                return Err(ProjectError::layer_rule(layer.id, "folders are nested in a cycle or too deeply"));
+                return Err(ProjectError::layer_rule(layer.id, "hierarchyCycle"));
             }
             let node = by_id.get(&id).ok_or(ProjectError::Invalid)?;
             if !node.is_folder() {
-                return Err(ProjectError::layer_rule(layer.id, "a layer's parent is not a folder"));
+                return Err(ProjectError::layer_rule(layer.id, "parentNotFolder"));
             }
             parent = node.parent_id;
         }
@@ -192,7 +192,7 @@ fn validate_clipping(
         let mut current = Some(layer.id);
         while let Some(id) = current {
             if path.len() >= limits.max_clip_chain || !path.insert(id) {
-                return Err(ProjectError::layer_rule(layer.id, "clipping masks form a cycle or a chain that is too long"));
+                return Err(ProjectError::layer_rule(layer.id, "clippingCycle"));
             }
             let record = by_id.get(&id).ok_or(ProjectError::Invalid)?;
             if let Some(source) = record.mask_source_id {
@@ -200,7 +200,7 @@ fn validate_clipping(
                 if record.is_folder() || target.is_folder() || target.adjustment.is_some() {
                     return Err(ProjectError::layer_rule(
                         layer.id,
-                        "only a plain layer can supply a clipping mask's coverage",
+                        "clippingSource",
                     ));
                 }
             }
@@ -215,7 +215,7 @@ fn validate_guides(manifest: &Manifest, limits: &Limits) -> Result<(), ProjectEr
     let guides = manifest.guides.as_deref().unwrap_or(&[]);
     if manifest.version < 8 {
         if !guides.is_empty() {
-            return Err(ProjectError::rule("guides need format version 8"));
+            return Err(ProjectError::rule("guidesVersion"));
         }
         return Ok(());
     }
@@ -225,13 +225,13 @@ fn validate_guides(manifest: &Manifest, limits: &Limits) -> Result<(), ProjectEr
     let mut ids = HashSet::new();
     for guide in guides {
         if !ids.insert(guide.id) {
-            return Err(ProjectError::rule("two guides share one id"));
+            return Err(ProjectError::rule("duplicateGuideId"));
         }
         if !guide.position.is_finite() || guide.position.abs() > 1_000_000.0 {
-            return Err(ProjectError::rule("a guide is off the canvas"));
+            return Err(ProjectError::rule("guidePosition"));
         }
         if !matches!(guide.axis, GuideAxis::Horizontal | GuideAxis::Vertical) {
-            return Err(ProjectError::rule("a guide's axis is neither horizontal nor vertical"));
+            return Err(ProjectError::rule("guideAxis"));
         }
     }
     Ok(())

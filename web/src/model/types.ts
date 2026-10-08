@@ -133,6 +133,20 @@ export const DEFAULT_LIMITS: AppLimits = {
   supportedVersions: [MIN_VERSION, CURRENT_VERSION],
 }
 
+/** The `blendModes.*` key for a format blend-mode name, which contains spaces and brackets. */
+export function blendModeKey(name: string): string {
+  return `blendModes.${name
+    .toLowerCase()
+    .replace(' (', '-')
+    .replace(/[()]/g, '')
+    .replace(/\s+/g, '-')}`
+}
+
+/** The `sampling.*` key for a format sampling name. */
+export function samplingKey(name: string): string {
+  return `sampling.${name.toLowerCase().replace(/\s+/g, '-')}`
+}
+
 export function isFolder(layer: LayerRecord): boolean {
   return layer.isGroup === true
 }

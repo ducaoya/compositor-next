@@ -62,6 +62,8 @@ interface Frame {
   nearestSampler: GPUSampler
   dummy: GPUTexture
   accum: [GPUTexture, GPUTexture] | null
+  /** Layer textures by asset key, so a repaint can update the one already on the GPU. */
+  layerTextures: Map<string, GPUTexture>
   /** The texture holding the last composited frame. */
   last: GPUTexture | null
   exportTexture: GPUTexture | null
@@ -212,6 +214,7 @@ export class Compositor {
       nearestSampler,
       dummy,
       accum: null,
+      layerTextures: new Map(),
       last: null,
       exportTexture: null,
       exportSize: [0, 0],
@@ -390,26 +393,66 @@ export class Compositor {
   }
 
   /**
-   * Uploads decoded pixels as a layer texture. Replaces any texture already held for `id`.
+   * Uploads decoded pixels as a layer texture, or updates the region already there.
+   *
+   * A brush stroke changes a small rectangle per dab, and re-uploading the whole layer for each
+   * one would spend more on the bus than on the drawing. `region` is in the source's own pixels.
    *
    * `RENDER_ATTACHMENT` is not decoration: `copyExternalImageToTexture` runs a render pass
    * internally and refuses a destination that is not renderable, so a texture without it stays
    * empty and every layer composites to nothing — silently, unless an error scope is watching.
    */
-  upload(id: string, source: GPUCopyExternalImageSource, width: number, height: number): GPUTexture {
+  setLayerTexture(
+    key: string,
+    source: GPUCopyExternalImageSource,
+    width: number,
+    height: number,
+    region?: { x: number; y: number; width: number; height: number },
+  ): GPUTexture {
     const frame = this.frame
-    const texture = frame.device.createTexture({
-      label: id,
-      size: [width, height, 1],
-      format: 'rgba8unorm',
-      usage:
-        GPUTextureUsage.TEXTURE_BINDING |
-        GPUTextureUsage.COPY_DST |
-        GPUTextureUsage.RENDER_ATTACHMENT,
-    })
-    frame.device.queue.copyExternalImageToTexture({ source }, { texture }, [width, height])
-    this.bindGroupCache.clear()
+    let texture = frame.layerTextures.get(key)
+    if (!texture || texture.width !== width || texture.height !== height) {
+      texture?.destroy()
+      texture = frame.device.createTexture({
+        label: key,
+        size: [width, height, 1],
+        format: 'rgba8unorm',
+        usage:
+          GPUTextureUsage.TEXTURE_BINDING |
+          GPUTextureUsage.COPY_DST |
+          GPUTextureUsage.RENDER_ATTACHMENT,
+      })
+      frame.layerTextures.set(key, texture)
+      this.bindGroupCache.clear()
+    }
+
+    const area = region
+      ? {
+          x: Math.max(0, Math.floor(region.x)),
+          y: Math.max(0, Math.floor(region.y)),
+          width: Math.min(width, Math.ceil(region.x + region.width)) - Math.max(0, Math.floor(region.x)),
+          height: Math.min(height, Math.ceil(region.y + region.height)) - Math.max(0, Math.floor(region.y)),
+        }
+      : { x: 0, y: 0, width, height }
+    if (area.width <= 0 || area.height <= 0) return texture
+
+    frame.device.queue.copyExternalImageToTexture(
+      { source, origin: { x: area.x, y: area.y } },
+      { texture, origin: { x: area.x, y: area.y } },
+      [area.width, area.height],
+    )
     return texture
+  }
+
+  /** Uploads a whole layer at once. */
+  upload(key: string, source: GPUCopyExternalImageSource, width: number, height: number): GPUTexture {
+    return this.setLayerTexture(key, source, width, height)
+  }
+
+  disposeLayerTexture(key: string): void {
+    this.frame.layerTextures.get(key)?.destroy()
+    this.frame.layerTextures.delete(key)
+    this.bindGroupCache.clear()
   }
 
   /**
@@ -520,6 +563,8 @@ export class Compositor {
   destroy(): void {
     for (const texture of this.frame.accum ?? []) texture.destroy()
     this.frame.accum = null
+    for (const texture of this.frame.layerTextures.values()) texture.destroy()
+    this.frame.layerTextures.clear()
     this.frame.exportTexture?.destroy()
     this.frame.compositeUniforms.destroy()
     this.frame.displayUniform.destroy()

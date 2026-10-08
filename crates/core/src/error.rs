@@ -6,49 +6,92 @@ pub const SUPPORTED_FIRST: u32 = crate::MIN_VERSION;
 pub const SUPPORTED_LAST: u32 = crate::CURRENT_VERSION;
 
 /// Everything that can go wrong reading or writing a `.comp`.
+///
+/// Each case carries **no prose**: the message a reader sees comes from the language pack, keyed by
+/// the variant. Two exceptions are deliberate. `Rule` carries a `code` naming which rule broke,
+/// which the frontend looks up as `error.rule.<code>`. `Io` and `Json` wrap failures from the
+/// platform, which have no translation and are shown as they come.
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectError {
-    #[error("this is not a valid Compositor project, or its metadata is damaged")]
+    #[error("error.invalid")]
     Invalid,
 
-    #[error(
-        "this project uses format version {0}; this app supports versions \
-         {SUPPORTED_FIRST}–{SUPPORTED_LAST}"
-    )]
+    #[error("error.version")]
     Version(u32),
 
-    #[error("an image inside the project is missing or damaged. The current document has not been replaced")]
+    #[error("error.missingImage")]
     MissingImage,
 
-    #[error(
-        "this project exceeds the supported canvas, layer, file-size, or {0}-megapixel document limit"
-    )]
+    #[error("error.tooLarge")]
     TooLarge(u64),
 
-    #[error("an image could not be saved. The previous project has not been replaced")]
+    #[error("error.encode")]
     Encode,
 
-    #[error("no file or folder at {0}")]
+    #[error("error.notFound")]
     NotFound(PathBuf),
 
-    /// A failure the manifest validator found, carrying the offending layer when there is one.
-    #[error("{reason}")]
-    Rule { reason: String, layer: Option<uuid::Uuid> },
+    /// A manifest rule, named by `code` and stamped with the layer that broke it when there is one.
+    #[error("error.rule.{code}")]
+    Rule { code: &'static str, layer: Option<uuid::Uuid> },
 
-    #[error("{0}")]
+    #[error("error.io")]
     Io(#[from] std::io::Error),
 
-    #[error("metadata is not valid JSON: {0}")]
+    #[error("error.json")]
     Json(#[from] serde_json::Error),
 }
 
 impl ProjectError {
-    pub(crate) fn rule(reason: impl Into<String>) -> Self {
-        Self::Rule { reason: reason.into(), layer: None }
+    /// The rule that broke, with no layer attached.
+    pub(crate) fn rule(code: &'static str) -> Self {
+        Self::Rule { code, layer: None }
     }
 
-    pub(crate) fn layer_rule(layer: uuid::Uuid, reason: impl Into<String>) -> Self {
-        Self::Rule { reason: reason.into(), layer: Some(layer) }
+    /// The rule that broke on one layer, so the UI can point at it.
+    pub(crate) fn layer_rule(layer: uuid::Uuid, code: &'static str) -> Self {
+        Self::Rule { code, layer: Some(layer) }
+    }
+
+    /// The translation key, without the `error.` prefix.
+    pub fn code(&self) -> &str {
+        match self {
+            ProjectError::Invalid => "invalid",
+            ProjectError::Version(_) => "version",
+            ProjectError::MissingImage => "missingImage",
+            ProjectError::TooLarge(_) => "tooLarge",
+            ProjectError::Encode => "encode",
+            ProjectError::NotFound(_) => "notFound",
+            ProjectError::Rule { code, .. } => code,
+            ProjectError::Io(_) => "io",
+            ProjectError::Json(_) => "json",
+        }
+    }
+
+    /// The full translation key: `error.*` for the general cases, `error.rule.*` for the rules.
+    pub fn message_key(&self) -> String {
+        match self {
+            ProjectError::Rule { code, .. } => format!("error.rule.{code}"),
+            other => format!("error.{}", other.code()),
+        }
+    }
+
+    /// Values for the key's placeholders.
+    pub fn params(&self) -> serde_json::Value {
+        use serde_json::json;
+        match self {
+            ProjectError::Version(version) => json!({
+                "version": version,
+                "min": SUPPORTED_FIRST,
+                "max": SUPPORTED_LAST,
+            }),
+            ProjectError::TooLarge(megapixels) => json!({ "megapixels": megapixels }),
+            ProjectError::NotFound(path) => json!({ "path": path.to_string_lossy() }),
+            ProjectError::Rule { layer, .. } => json!({ "layer": layer.map(|id| id.to_string()) }),
+            ProjectError::Io(error) => json!({ "message": error.to_string() }),
+            ProjectError::Json(error) => json!({ "message": error.to_string() }),
+            _ => json!({}),
+        }
     }
 }
 

@@ -136,7 +136,7 @@ pub fn save(
         for ((layer, kind), bytes) in &assets.files {
             let declared = declared_name(manifest, *layer, *kind);
             if declared.is_none() {
-                return Err(ProjectError::layer_rule(*layer, "the manifest does not name this asset"));
+                return Err(ProjectError::layer_rule(*layer, "assetNotDeclared"));
             }
             fs::write(staging.join(IMAGES_DIR).join(kind.required_file_name(*layer)), bytes)?;
         }

@@ -48,6 +48,12 @@ export interface OpenedProject {
 /** Bytes to write for an asset, or `null` to copy the file the project already has. */
 export type AssetBytes = Map<string, Uint8Array | null>
 
+/** A file the user chose, already in memory. */
+export interface PickedImage {
+  name: string
+  blob: Blob
+}
+
 export interface Backend {
   readonly kind: 'tauri' | 'browser'
   /** False in the browser: there is nowhere to write a project. */
@@ -55,6 +61,16 @@ export interface Backend {
   openProject(): Promise<OpenedProject | null>
   createProject(width: number, height: number): Promise<OpenedProject | null>
   saveProject(project: OpenedProject, manifest: Manifest, bytes: AssetBytes): Promise<OpenedProject>
+  /** Shows a picker and returns whatever the user chose, or nothing. */
+  pickImages(): Promise<PickedImage[]>
+  /** Reads files the operating system dropped, which arrive as paths. */
+  readFiles(paths: readonly string[]): Promise<PickedImage[]>
+  /** Language packs installed outside the app, parsed. */
+  listLanguagePacks(): Promise<unknown[]>
+  /** Shows a picker, installs what is chosen, and returns it. */
+  installLanguagePack(): Promise<unknown | null>
+  /** Opens the folder packs are installed into, so one can be dropped in by hand. */
+  openLanguageFolder(): Promise<void>
   limits(): Promise<AppLimits>
   exportFile(suggestedName: string, blob: Blob): Promise<void>
   reportError(message: string): Promise<void>
@@ -81,9 +97,31 @@ interface RawProject {
   assets: RawAsset[]
 }
 
+const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp']
+const PACK_STORAGE_KEY = 'compositor.languagePacks'
+
+function fileName(path: string): string {
+  return path.split(/[\\/]/).pop() ?? path
+}
+
 async function tauriBackend(): Promise<Backend> {
   const { invoke, convertFileSrc } = await import('@tauri-apps/api/core')
   const dialog = await import('@tauri-apps/plugin-dialog')
+
+  const readFiles = async (paths: readonly string[]): Promise<PickedImage[]> => {
+    const picked: PickedImage[] = []
+    for (const path of paths) {
+      try {
+        // The Rust side answers with the bytes as a raw body, so a 40 MB image is not doubled by
+        // being written out as a JSON array of numbers on the way past.
+        const buffer = await invoke<ArrayBuffer>('read_file', { path })
+        picked.push({ name: fileName(path), blob: new Blob([buffer]) })
+      } catch (error) {
+        console.error(`could not read ${path}`, error)
+      }
+    }
+    return picked
+  }
 
   const toOpened = (raw: RawProject): OpenedProject => ({
     path: raw.path,
@@ -151,6 +189,38 @@ async function tauriBackend(): Promise<Backend> {
         throw error
       }
       return { ...project, manifest }
+    },
+
+    async pickImages() {
+      const chosen = await dialog.open({
+        title: 'Import Images',
+        multiple: true,
+        filters: [{ name: 'Images', extensions: IMAGE_EXTENSIONS }],
+      })
+      if (!chosen) return []
+      const paths = Array.isArray(chosen) ? chosen : [chosen]
+      return readFiles(paths)
+    },
+
+    readFiles,
+
+    async listLanguagePacks() {
+      return invoke<unknown[]>('list_language_packs')
+    },
+
+    async installLanguagePack() {
+      const chosen = await dialog.open({
+        title: 'Install Language Pack',
+        multiple: false,
+        filters: [{ name: 'Language pack', extensions: ['json'] }],
+      })
+      if (!chosen) return null
+      const path = typeof chosen === 'string' ? chosen : chosen[0]
+      return invoke<unknown>('install_language_pack', { path })
+    },
+
+    async openLanguageFolder() {
+      await invoke('open_language_folder')
     },
 
     async limits() {
@@ -353,6 +423,43 @@ function browserBackend(): Backend {
       return { ...project, manifest }
     },
 
+    async pickImages() {
+      const picked = await pickWithInput(IMAGE_EXTENSIONS)
+      return picked
+    },
+
+    async readFiles() {
+      // A browser is not handed a path; dropping a file in gives the bytes directly.
+      return []
+    },
+
+    async listLanguagePacks() {
+      const stored = localStorage.getItem(PACK_STORAGE_KEY)
+      if (!stored) return []
+      try {
+        const parsed: unknown = JSON.parse(stored)
+        return Array.isArray(parsed) ? parsed : []
+      } catch {
+        return []
+      }
+    },
+
+    async installLanguagePack() {
+      const [file] = await pickWithInput(['.json'])
+      if (!file) return null
+      const text = await file.blob.text()
+      const value: unknown = JSON.parse(text)
+      const list = await this.listLanguagePacks()
+      const kept = list.filter((entry) => (entry as { locale?: string }).locale !== (value as { locale?: string }).locale)
+      // Local storage stands in for the data folder the desktop build writes to.
+      localStorage.setItem(PACK_STORAGE_KEY, JSON.stringify([...kept, value]))
+      return value
+    },
+
+    async openLanguageFolder() {
+      // A browser has no folder to open; the pack is kept in local storage instead.
+    },
+
     async limits() {
       return DEFAULT_LIMITS
     },
@@ -371,6 +478,22 @@ function browserBackend(): Backend {
       window.alert(message)
     },
   }
+}
+
+/** A hidden `<input type="file">`, the only way a browser gives up a file the user chose. */
+function pickWithInput(extensions: readonly string[]): Promise<PickedImage[]> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = extensions.map((extension) => `.${extension}`).join(',')
+    input.multiple = true
+    input.addEventListener('change', () => {
+      const files = [...(input.files ?? [])].map((file) => ({ name: file.name, blob: file }))
+      resolve(files)
+    })
+    input.addEventListener('cancel', () => resolve([]))
+    input.click()
+  })
 }
 
 let cached: Promise<Backend> | null = null
