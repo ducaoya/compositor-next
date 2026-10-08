@@ -245,9 +245,15 @@ fn adjust_color(c: vec3f, pixel: vec2f, uv: vec2f) -> vec3f {
         let amount = clamp(adjust.p2.z / 100.0, -1.0, 1.0);
         hsl.z = select(hsl.z * (1.0 + amount), hsl.z + (1.0 - hsl.z) * amount, amount >= 0.0);
       } else {
-        hsl.x = (hsl.x + adjust.p2.x) - floor((hsl.x + adjust.p2.x) / 360.0) * 360.0;
-        hsl.y = adjusted_saturation(hsl.y, adjust.p2.y);
-        let amount = clamp(adjust.p2.z / 100.0, -1.0, 1.0);
+        // The response for this pixel's own hue: the six colour ranges summed, each weighted by how
+        // strongly it claims that hue. The CPU baked the table, the same shape the reference builds.
+        let response = textureLoad(lutTex, vec2i(clamp(i32(hsl.x + 0.5), 0, 359), 0), 0);
+        let shift = response.r / 255.0 * 360.0 - 180.0;
+        let saturation = response.g / 255.0 * 200.0 - 100.0;
+        let lightness = response.b / 255.0 * 200.0 - 100.0;
+        hsl.x = (hsl.x + shift) - floor((hsl.x + shift) / 360.0) * 360.0;
+        hsl.y = adjusted_saturation(hsl.y, saturation);
+        let amount = clamp(lightness / 100.0, -1.0, 1.0);
         hsl.z = select(hsl.z * (1.0 + amount), hsl.z + (1.0 - hsl.z) * amount, amount >= 0.0);
       }
       return hsl_to_rgb(hsl);

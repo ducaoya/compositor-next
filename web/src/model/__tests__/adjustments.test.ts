@@ -70,8 +70,9 @@ describe('the adjustment kinds', () => {
       const lut = buildLut(adjustment)
       if (lut) {
         // Levels, Curves and Exposure start as the identity. Invert does not: its cheapest
-        // starting point is a full inversion, which the test below pins.
-        if (kind === 'Invert') continue
+        // starting point is a full inversion, which the test below pins. Hue/Saturation carries a
+        // hue response rather than a per-channel curve, which hueBands.test.ts covers.
+        if (kind === 'Invert' || kind === 'Hue/Saturation') continue
         for (let value = 0; value < 256; value += 1) {
           expect(lut[value]).toBe(value)
           expect(lut[256 + value]).toBe(value)
@@ -86,7 +87,8 @@ describe('the adjustment kinds', () => {
     expect(buildLut(identityAdjustment('Curves'))).not.toBeNull()
     expect(buildLut(identityAdjustment('Exposure'))).not.toBeNull()
     expect(buildLut(identityAdjustment('Invert'))).not.toBeNull()
-    expect(buildLut(identityAdjustment('Hue/Saturation'))).toBeNull()
+    // Hue/Saturation is a table too, but of hue response rather than per-channel output.
+    expect(buildLut(identityAdjustment('Hue/Saturation'))).toHaveLength(360 * 4)
     expect(buildLut(identityAdjustment('Color Balance'))).toBeNull()
     expect(buildLut(identityAdjustment('Gaussian Blur'))).toBeNull()
   })

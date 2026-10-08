@@ -19,6 +19,7 @@ import { BLEND_MODES, type BlendModeName, type Transform } from '../model/types'
 import {
   ADJUST_UNIFORM_VECS,
   buildLut,
+  needsHueResponse,
   packAdjustment,
   type LayerAdjustment,
 } from '../model/adjustments'
@@ -427,9 +428,14 @@ export class Compositor {
     const signature = table
       ? [
           item.adjustment.kind,
+          needsHueResponse(item.adjustment.kind) ? 'hue' : 'lut',
           JSON.stringify(item.adjustment.levels ?? null),
           JSON.stringify(item.adjustment.curves ?? null),
           JSON.stringify(item.adjustment.exposureSettings ?? null),
+          // Hue/Saturation's table is built from these, so leaving them out meant a change of
+          // colour range reused the previous table: "blues only" applied to every hue.
+          JSON.stringify(item.adjustment.hsvSettings ?? null),
+          JSON.stringify([item.adjustment.hue, item.adjustment.saturation, item.adjustment.lightness]),
         ].join('|')
       : 'none'
 
@@ -437,24 +443,33 @@ export class Compositor {
     if (cached && cached.signature === signature) return cached.texture
     cached?.texture.destroy()
 
+    // Two shapes of table: a 256 x 3 per-channel curve for Levels, Curves, Exposure and Invert,
+    // and a 360 x 1 hue response for Hue/Saturation. The binding does not care which.
+    const hueResponse = needsHueResponse(item.adjustment.kind)
+    const width = hueResponse ? 360 : 256
+    const height = hueResponse ? 1 : 3
     const texture = frame.device.createTexture({
-      label: `lut ${item.id}`,
-      size: [256, 3, 1],
+      label: `table ${item.id}`,
+      size: [width, height, 1],
       format: 'rgba8unorm',
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
     })
     if (table) {
-      // One channel per row — red, green, blue — with the value in the red component.
-      const rgba = new Uint8Array(256 * 3 * 4)
-      for (let index = 0; index < 256 * 3; index += 1) {
-        rgba[index * 4] = table[index]
-        rgba[index * 4 + 3] = 255
+      const rgba = new Uint8Array(width * height * 4)
+      if (hueResponse) {
+        rgba.set(table.subarray(0, width * 4))
+      } else {
+        // One channel per row — red, green, blue — with the value in the red component.
+        for (let index = 0; index < width * height; index += 1) {
+          rgba[index * 4] = table[index]
+          rgba[index * 4 + 3] = 255
+        }
       }
       frame.device.queue.writeTexture(
         { texture },
         rgba,
-        { bytesPerRow: 256 * 4, rowsPerImage: 3 },
-        [256, 3, 1],
+        { bytesPerRow: width * 4, rowsPerImage: height },
+        [width, height, 1],
       )
     }
     frame.luts.set(item.id, { texture, signature })

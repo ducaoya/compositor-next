@@ -58,6 +58,16 @@ export interface HueSaturationSettings {
   saturation: number
   lightness: number
   colorize: boolean
+  /** The range the panel is showing. Not part of the rendering. */
+  range?: string
+  invertRange?: boolean
+  /**
+   * Per-range adjustments, keyed by range. Missing means the flat values above are the master,
+   * which is what an adjustment written before the bands existed has.
+   */
+  adjustments?: Partial<Record<ColorRange, RangeAdjustment>>
+  /** The bands themselves; a project may have moved one, so they are stored with it. */
+  bands?: Partial<Record<ColorRange, HueBand>>
 }
 
 export interface ExposureSettings {
@@ -288,6 +298,120 @@ export function resolvedColorBalance(adjustment: LayerAdjustment): ColorBalanceS
   return { ...defaultColorBalance(), ...(adjustment.colorBalanceSettings ?? {}) }
 }
 
+// MARK: - Hue/Saturation's colour-range bands
+
+/** The six ranges Photoshop splits the hue wheel into, and the master that covers all of it. */
+export const COLOR_RANGES = ['master', 'reds', 'yellows', 'greens', 'cyans', 'blues', 'magentas'] as const
+export type ColorRange = (typeof COLOR_RANGES)[number]
+
+/** A band in degrees, wrapping at 360: full strength between the range ends, fading to nothing at
+ *  the falloffs. */
+export interface HueBand {
+  falloffStart: number
+  rangeStart: number
+  rangeEnd: number
+  falloffEnd: number
+}
+
+/** Photoshop's starting bands. The six special ones tile the wheel with their falloffs overlapping. */
+export const DEFAULT_BANDS: Record<ColorRange, HueBand> = {
+  master: { falloffStart: 0, rangeStart: 0, rangeEnd: 360, falloffEnd: 360 },
+  reds: { falloffStart: 315, rangeStart: 345, rangeEnd: 15, falloffEnd: 45 },
+  yellows: { falloffStart: 15, rangeStart: 45, rangeEnd: 75, falloffEnd: 105 },
+  greens: { falloffStart: 75, rangeStart: 105, rangeEnd: 135, falloffEnd: 165 },
+  cyans: { falloffStart: 135, rangeStart: 165, rangeEnd: 195, falloffEnd: 225 },
+  blues: { falloffStart: 195, rangeStart: 225, rangeEnd: 255, falloffEnd: 285 },
+  magentas: { falloffStart: 255, rangeStart: 285, rangeEnd: 315, falloffEnd: 345 },
+}
+
+/** Degrees from `from` forward to `to`, always 0…360. */
+export function forward(from: number, to: number): number {
+  const delta = (to - from) % 360
+  return delta < 0 ? delta + 360 : delta
+}
+
+/**
+ * How strongly a band claims a hue, 0 to 1.
+ *
+ * Full strength between the range ends, ramping in and out across the falloffs, and wrapping so
+ * that reds — which straddle zero — behave like the others.
+ */
+export function bandWeight(band: HueBand, hue: number): number {
+  const span = forward(band.falloffStart, band.falloffEnd)
+  // A band that covers the whole wheel — the master — claims everything.
+  if (span <= 0) return 1
+  const position = forward(band.falloffStart, hue)
+  if (position > span) return 0
+  const rampIn = forward(band.falloffStart, band.rangeStart)
+  const plateauEnd = forward(band.falloffStart, band.rangeEnd)
+  if (position < rampIn) return rampIn > 0 ? position / rampIn : 1
+  if (position <= plateauEnd) return 1
+  const rampOut = span - plateauEnd
+  return rampOut > 0 ? (span - position) / rampOut : 1
+}
+
+/** One range's adjustment, as the manifest holds it. */
+export interface RangeAdjustment {
+  hue: number
+  saturation: number
+  lightness: number
+}
+
+function rangeAdjustments(adjustment: LayerAdjustment): Partial<Record<ColorRange, RangeAdjustment>> {
+  const fromSettings = adjustment.hsvSettings?.adjustments
+  if (fromSettings && Object.keys(fromSettings).length > 0) return fromSettings
+  // Without per-range settings, the flat hue/saturation/lightness on the adjustment is the master.
+  return {
+    master: {
+      hue: adjustment.hue ?? 0,
+      saturation: adjustment.saturation ?? 0,
+      lightness: adjustment.lightness ?? 0,
+    },
+  }
+}
+
+function bandsFor(adjustment: LayerAdjustment): Record<ColorRange, HueBand> {
+  return { ...DEFAULT_BANDS, ...(adjustment.hsvSettings?.bands ?? {}) }
+}
+
+/**
+ * The response table: what the six ranges add up to at every degree of hue.
+ *
+ * Precomputing it is the reference's own approach, and it turns a per-pixel loop over six weighted
+ * bands into one texture fetch. The degrees are the *pixel's* hue, which is why this cannot be
+ * folded into the value table the other kinds use.
+ */
+export function buildHueResponse(adjustment: LayerAdjustment): Uint8Array {
+  const bands = bandsFor(adjustment)
+  const adjustments = rangeAdjustments(adjustment)
+  const out = new Uint8Array(360 * 4)
+  for (let hue = 0; hue < 360; hue += 1) {
+    let shift = 0
+    let saturation = 0
+    let lightness = 0
+    for (const range of COLOR_RANGES) {
+      const each = adjustments[range]
+      if (!each || (each.hue === 0 && each.saturation === 0 && each.lightness === 0)) continue
+      const weight = bandWeight(bands[range], hue)
+      if (weight === 0) continue
+      shift += each.hue * weight
+      saturation += each.saturation * weight
+      lightness += each.lightness * weight
+    }
+    // Packed into bytes the shader can unpack: a shift of ±180, and ±100 for the other two.
+    out[hue * 4] = Math.round(Math.min(1, Math.max(0, (shift + 180) / 360)) * 255)
+    out[hue * 4 + 1] = Math.round(Math.min(1, Math.max(0, (saturation + 100) / 200)) * 255)
+    out[hue * 4 + 2] = Math.round(Math.min(1, Math.max(0, (lightness + 100) / 200)) * 255)
+    out[hue * 4 + 3] = 255
+  }
+  return out
+}
+
+/** Whether the adjustment needs a response table at all, which is only Hue/Saturation. */
+export function needsHueResponse(kind: AdjustmentKind): boolean {
+  return kind === 'Hue/Saturation'
+}
+
 // MARK: - The lookup table
 
 /** `lut_kind` in the shader: which of the four kinds is a per-channel table. */
@@ -366,8 +490,16 @@ function toEncoded(linear: number): number {
  *
  * Returns null for a kind that is not a table, which is the shader's signal to compute in place.
  */
+/** A precomputed table, and the shape the shader has to read it at. */
+export interface AdjustmentTable {
+  width: number
+  height: number
+  data: Uint8Array
+}
+
 export function buildLut(adjustment: LayerAdjustment): Uint8Array | null {
   const kind = adjustment.kind
+  if (needsHueResponse(kind)) return buildHueResponse(adjustment)
   if (!needsLut(kind)) return null
   const table = new Uint8Array(256 * 3)
 
@@ -472,7 +604,10 @@ export function packAdjustment(
 
   const blurRadius =
     adjustment.kind === 'Gaussian Blur' ? adjustment.blurRadius ?? 0 : adjustment.motionDistance ?? 0
-  out.set([blurRadius, direction[0], direction[1], needsLut(adjustment.kind) ? 1 : 0], 20)
+  out.set(
+    [blurRadius, direction[0], direction[1], needsLut(adjustment.kind) || needsHueResponse(adjustment.kind) ? 1 : 0],
+    20,
+  )
 
   out.set([blackWhite.reds, blackWhite.yellows, blackWhite.greens, blackWhite.cyans], 24)
   out.set(
