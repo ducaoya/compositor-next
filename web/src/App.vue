@@ -14,6 +14,7 @@ import CanvasStage from './components/CanvasStage.vue'
 import LayersPanel from './components/LayersPanel.vue'
 import NewCanvasSheet from './components/NewCanvasSheet.vue'
 import DimensionSheet from './components/DimensionSheet.vue'
+import DocumentTabs from './components/DocumentTabs.vue'
 import CommandPalette, { type Command } from './components/CommandPalette.vue'
 import EffectsSheet from './components/EffectsSheet.vue'
 import SelectionAmountSheet from './components/SelectionAmountSheet.vue'
@@ -281,7 +282,6 @@ function inTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }
 
-
 function toggleMenu(index: number): void {
   openMenu.value = openMenu.value === index ? null : index
 }
@@ -387,12 +387,6 @@ function onKeyDown(event: KeyboardEvent): void {
   }
 }
 
-const documentName = computed(() => {
-  const path = useSession().project.value?.path
-  if (!path) return manifest.value ? 'Untitled.comp' : t('status.noDocument')
-  return path.split(/[\\/]/).pop() ?? 'Untitled.comp'
-})
-
 onMounted(() => {
   void loadLanguagePacks()
   window.addEventListener('keydown', onKeyDown)
@@ -444,14 +438,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown))
       <ToolRail />
 
       <main class="doc">
-        <div class="doc__tabs">
-          <div class="tab" :class="{ 'tab--on': true }">
-            <span class="tab__icon">▣</span>
-            <span class="tab__name">{{ documentName }}</span>
-            <span v-if="dirty" class="tab__dot" :title="t('tab.unsaved')">•</span>
-          </div>
-          <button class="tab__new" :title="t('tab.newCanvas')" @click="newCanvasPrompt.open = true">+</button>
-        </div>
+        <DocumentTabs />
         <CanvasStage />
       </main>
 
@@ -617,60 +604,15 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown))
   background: var(--ps-frame-dark);
 }
 
-.doc__tabs {
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  height: 26px;
-  padding: 3px 4px 0;
-  background: var(--ps-frame-dark);
-}
 
-.tab {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  max-width: 240px;
-  padding: 3px 10px;
-  border-radius: 3px 3px 0 0;
-  background: var(--ps-panel);
-  color: var(--ps-text);
-}
 
-.tab--on {
-  color: var(--ps-text-strong);
-}
 
-.tab__icon {
-  color: #9aa0a8;
-  font-size: 10px;
-}
 
-.tab__name {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
 
-.tab__dot {
-  color: #e0b060;
-}
 
-.tab__new {
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: 0;
-  border-radius: 3px;
-  background: none;
-  color: var(--ps-text-dim);
-  cursor: pointer;
-}
 
-.tab__new:hover {
-  background: var(--ps-control);
-  color: var(--ps-text-strong);
-}
+
+
 
 .panels {
   display: grid;

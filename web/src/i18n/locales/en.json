@@ -294,7 +294,8 @@
   },
   "tab": {
     "unsaved": "Unsaved changes",
-    "newCanvas": "New canvas (Ctrl+N)"
+    "newCanvas": "New canvas (Ctrl+N)",
+    "close": "Close this project"
   },
   "blendModes": {
     "normal": "Normal",

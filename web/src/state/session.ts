@@ -9,7 +9,7 @@
  * only records an undo step when something actually changed.
  */
 
-import { computed, markRaw, reactive, ref, shallowRef } from 'vue'
+import { computed, markRaw, reactive, ref, shallowRef, toRaw } from 'vue'
 
 import { EditHistory } from '../model/history'
 import * as doc from '../model/document'
@@ -120,6 +120,173 @@ const canRender = ref(false)
 const gpuErrors = ref<string[]>([])
 const canGPU = ref(true)
 const historyVersion = ref(0)
+
+// MARK: - Open documents
+
+/**
+ * One open project.
+ *
+ * The state that belongs to a *document* rather than to the editor lives here, and the module-level
+ * refs below hold whichever one is active. Switching tabs stashes the refs into the record and
+ * reads the next record out, which is why there is exactly one place that does either — anything
+ * that sets `manifest` or `view` directly would be a tab that leaks into another.
+ *
+ * Textures, surfaces and effect rasters stay keyed by layer UUID, which is unique across documents,
+ * so they are shared and do not need stashing. Closing a tab releases its share.
+ */
+interface DocumentRecord {
+  id: string
+  /** Empty for a project that has never been saved. */
+  path: string
+  project: OpenedProject
+  manifest: Manifest
+  view: ViewState
+  history: EditHistory<Manifest>
+  selection: Selection | null
+  maskEditing: boolean
+  activeLayerId: string | null
+  selectedIds: string[]
+  collapsed: Set<string>
+  dirty: boolean
+}
+
+/**
+ * Deliberately shallow: a record holds an `EditHistory`, and deep reactivity would proxy the class
+ * instance and strip what it keeps private. Records are replaced, not mutated in place, and
+ * `touchDocuments` is what tells the tab bar that one changed.
+ */
+const documents = shallowRef<DocumentRecord[]>([])
+const documentsVersion = ref(0)
+
+function touchDocuments(): void {
+  documents.value = [...documents.value]
+  documentsVersion.value += 1
+}
+const activeDocumentId = ref<string | null>(null)
+
+/** What a tab is called: the file's name, or a placeholder until it has one. */
+export function documentName(record: DocumentRecord): string {
+  if (!record.path) return 'Untitled.comp'
+  return record.path.split(/[\\/]/).pop() ?? 'Untitled.comp'
+}
+
+export const documentTabs = computed(() => {
+  void documentsVersion.value
+  return documents.value.map((record) => ({
+    id: record.id,
+    name: documentName(record),
+    dirty: record.dirty,
+    active: record.id === activeDocumentId.value,
+  }))
+})
+
+/** Writes the live refs back into the active record. */
+function stashActive(): void {
+  const id = activeDocumentId.value
+  if (!id) return
+  const record = documents.value.find((item) => item.id === id)
+  if (!record) return
+  if (project.value) record.project = project.value
+  if (manifest.value) record.manifest = toRaw(manifest.value)
+  record.view = { zoom: view.zoom, panX: view.panX, panY: view.panY }
+  record.history = history
+  record.selection = selection.value
+  record.maskEditing = maskEditingRef.value
+  record.activeLayerId = activeLayerId.value
+  record.selectedIds = selectedIds.value
+  record.collapsed = collapsed.value
+  record.dirty = dirty.value
+  touchDocuments()
+}
+
+/** Empties everything, for when the last tab closes. */
+function clearDocument(): void {
+  activeDocumentId.value = null
+  project.value = null
+  manifest.value = null
+  history = newHistory()
+  history.clear()
+  bumpHistory()
+  selection.value = null
+  selectionMaskCanvas.value = null
+  maskEditingRef.value = false
+  activeLayerId.value = null
+  selectedIds.value = []
+  collapsed.value = new Set()
+  dirty.value = false
+  cropRect.value = null
+  lassoPoints.value = []
+  canRender.value = false
+}
+
+/** Reads a record out into the live refs, decoding its assets if they are not on the GPU yet. */
+async function restoreDocument(record: DocumentRecord, options: { fit?: boolean } = {}): Promise<void> {
+  activeDocumentId.value = record.id
+  project.value = record.project
+  manifest.value = record.manifest
+  view.zoom = record.view.zoom
+  view.panX = record.view.panX
+  view.panY = record.view.panY
+  history = record.history
+  maskEditingRef.value = record.maskEditing
+  activeLayerId.value = record.activeLayerId
+  selectedIds.value = record.selectedIds
+  collapsed.value = record.collapsed
+  dirty.value = record.dirty
+  bumpHistory()
+  // Tool state that belongs to a gesture, not to a document.
+  cropRect.value = null
+  lassoPoints.value = []
+  setSelection(record.selection)
+
+  const target = compositor.value
+  if (target) {
+    target.setDocumentSize(record.manifest.width, record.manifest.height)
+    await decodeAssets(record.project, target)
+  }
+  if (options.fit) fit()
+  canRender.value = true
+  await watchProject()
+}
+
+export async function activateDocument(id: string): Promise<void> {
+  if (id === activeDocumentId.value) return
+  const record = documents.value.find((item) => item.id === id)
+  if (!record) return
+  stashActive()
+  await restoreDocument(record)
+}
+
+/** Frees what a closed tab was holding: its textures and its paint surfaces. */
+function releaseDocument(record: DocumentRecord): void {
+  const target = compositor.value
+  for (const layer of record.manifest.layers) {
+    for (const kind of ['image', 'mask'] as const) {
+      target?.disposeLayerTexture(assetKey(layer.id, kind))
+      textures.delete(assetKey(layer.id, kind))
+      paintStore.dispose(layer.id, kind)
+      modifiedSurfaces.delete(assetKey(layer.id, kind))
+      surfaceVersion.delete(assetKey(layer.id, kind))
+    }
+    target?.disposeLayerTexture(`effect|${layer.id}`)
+    effectRasters.delete(layer.id)
+    effectTextures.delete(layer.id)
+    layerImages.delete(layer.id)
+  }
+}
+
+export async function closeDocument(id: string): Promise<void> {
+  stashActive()
+  const index = documents.value.findIndex((item) => item.id === id)
+  if (index < 0) return
+  releaseDocument(documents.value[index])
+  documents.value = documents.value.filter((item) => item.id !== id)
+  touchDocuments()
+  if (activeDocumentId.value !== id) return
+  const next = documents.value[index] ?? documents.value[index - 1] ?? null
+  if (next) await restoreDocument(next)
+  else clearDocument()
+}
 
 // MARK: - Tools, colours and painting
 
@@ -273,10 +440,19 @@ const wandContiguous = ref(true)
 
 // `structuredClone` refuses a Vue proxy, and the document is JSON by definition, so the history
 // snapshots are taken the same way the format serializes them.
-const history = new EditHistory<Manifest>({
-  limit: 200,
-  clone: ((state: Manifest) => JSON.parse(JSON.stringify(state))) as <S>(state: S) => S,
-})
+/**
+ * `structuredClone` refuses a Vue proxy, and the document is JSON by definition, so the history
+ * snapshots are taken the same way the format serializes them.
+ */
+function newHistory(): EditHistory<Manifest> {
+  return new EditHistory<Manifest>({
+    limit: 200,
+    clone: ((state: Manifest) => JSON.parse(JSON.stringify(state))) as <S>(state: S) => S,
+  })
+}
+
+/** The active tab's history. Every other tab keeps its own, in its record. */
+let history = newHistory()
 let pendingBytes: AssetBytes = new Map()
 
 // MARK: - Derived state
@@ -626,6 +802,8 @@ export function redo(): void {
 
 async function decodeAssets(opened: OpenedProject, target: Compositor): Promise<void> {
   const jobs = opened.assets.map(async (asset) => {
+    // Already on the GPU, from this tab or a previous visit: uploading it again would only cost.
+    if (textures.has(assetKey(asset.layerId, asset.kind))) return
     try {
       const response = await fetch(asset.url)
       const blob = await response.blob()
@@ -688,9 +866,17 @@ async function reloadFromDisk(): Promise<void> {
     }
 
     const keptView = { zoom: view.zoom, panX: view.panX, panY: view.panY }
+    const record = documents.value.find((item) => item.id === activeDocumentId.value)
+    if (record) {
+      record.project = fresh
+      record.manifest = fresh.manifest
+      record.dirty = false
+      touchDocuments()
+    }
     project.value = fresh
     manifest.value = fresh.manifest
     history.clear()
+    history = record?.history ?? history
     bumpHistory()
     dirty.value = false
     if (!fresh.manifest.layers.some((layer) => layer.id === activeLayerId.value)) {
@@ -747,33 +933,40 @@ async function watchProject(): Promise<void> {
   }
 }
 
+/**
+ * Opens a project, in a new tab or in the one that already has it.
+ *
+ * Opening the same file twice would give two tabs writing to one package, so a path that is
+ * already open is activated instead.
+ */
 async function adopt(opened: OpenedProject): Promise<void> {
-  project.value = opened
-  manifest.value = opened.manifest
-  textures.clear()
-  paintStore.clear()
-  modifiedSurfaces.clear()
-  surfaceVersion.clear()
-  effectRasters.clear()
-  effectTextures.clear()
-  maskEditingRef.value = false
-  layerImages.clear()
-  selection.value = null
-  pendingBytes = new Map()
-  history.clear()
-  bumpHistory()
-  dirty.value = false
-  selectedIds.value = []
-  activeLayerId.value = opened.manifest.activeLayerID ?? opened.manifest.layers.at(-1)?.id ?? null
-  collapsed.value = new Set()
-
-  const target = compositor.value
-  if (target) {
-    target.setDocumentSize(opened.manifest.width, opened.manifest.height)
-    await decodeAssets(opened, target)
+  stashActive()
+  if (opened.path) {
+    const existing = documents.value.find((item) => item.path === opened.path)
+    if (existing) {
+      await restoreDocument(existing)
+      return
+    }
   }
-  fit()
-  await watchProject()
+  pendingBytes = new Map()
+  const record: DocumentRecord = {
+    id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    path: opened.path,
+    project: opened,
+    manifest: opened.manifest,
+    view: { zoom: 1, panX: 0, panY: 0 },
+    history: newHistory(),
+    selection: null,
+    maskEditing: false,
+    activeLayerId: opened.manifest.activeLayerID ?? opened.manifest.layers.at(-1)?.id ?? null,
+    selectedIds: [],
+    collapsed: new Set(),
+    dirty: false,
+  }
+  documents.value = [...documents.value, record]
+  touchDocuments()
+  canRender.value = true
+  await restoreDocument(record, { fit: true })
 }
 
 export async function openProject(): Promise<void> {

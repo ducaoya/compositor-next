@@ -294,7 +294,8 @@
   },
   "tab": {
     "unsaved": "未保存的更改",
-    "newCanvas": "新建画布 (Ctrl+N)"
+    "newCanvas": "新建画布 (Ctrl+N)",
+    "close": "关闭此工程"
   },
   "blendModes": {
     "normal": "正常",

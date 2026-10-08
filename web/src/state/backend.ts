@@ -270,7 +270,7 @@ function ensureExtension(path: string, extension: string): string {
 // MARK: - Browser
 
 /** A small document built from `OffscreenCanvas`, so the app has something to show. */
-async function demoProject(): Promise<OpenedProject> {
+async function demoProject(path = ''): Promise<OpenedProject> {
   const width = 960
   const height = 640
   const manifest = createManifest(width, height)
@@ -401,8 +401,7 @@ async function demoProject(): Promise<OpenedProject> {
     url: URL.createObjectURL(maskBlob),
   })
 
-  // A path, so the reload path has something to reload from. A browser has no folder behind it.
-  return { path: 'demo.comp', manifest, assets }
+  return { path, manifest, assets }
 }
 
 /** Browser canvas blobs are made synchronously at module scope, so this is a promise for shape. */
@@ -420,18 +419,20 @@ function browserBackend(): Backend {
       // The manifest is cloned on every open. Handing back the same object would mean editing a
       // document and reopening it showed the edits still applied, which is not what reopening a
       // file does anywhere else.
-      current ??= await demoProject()
+      current ??= await demoProject('demo.comp')
       return { ...current, manifest: structuredClone(current.manifest) }
     },
 
     async openProjectAt() {
       // A browser has no files to watch, so this is only ever reached from a reload.
-      current ??= await demoProject()
+      current ??= await demoProject('demo.comp')
       return { ...current, manifest: structuredClone(current.manifest) }
     },
 
     async createProject() {
-      current = await demoProject()
+      // No path: a document that has never been saved has none, and two of them must not be
+      // mistaken for the same project.
+      current = await demoProject('')
       return { ...current, manifest: structuredClone(current.manifest) }
     },
 
