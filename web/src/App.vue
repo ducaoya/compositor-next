@@ -13,6 +13,7 @@ import { useI18n } from 'vue-i18n'
 import CanvasStage from './components/CanvasStage.vue'
 import LayersPanel from './components/LayersPanel.vue'
 import NewCanvasSheet from './components/NewCanvasSheet.vue'
+import SelectionAmountSheet from './components/SelectionAmountSheet.vue'
 import OptionsBar from './components/OptionsBar.vue'
 import PropertiesPanel from './components/PropertiesPanel.vue'
 import StatusBar from './components/StatusBar.vue'
@@ -40,6 +41,7 @@ import {
   newCanvasPrompt,
   openProject,
   openLanguageFolder,
+  promptSelectionAmount,
   redo,
   reloadLanguagePacks,
   saveProject,
@@ -52,7 +54,7 @@ import {
 } from './state/session'
 
 const { t, locale } = useI18n()
-const { manifest, foreground, background, dirty, busy, locales } = useSession()
+const { manifest, foreground, background, dirty, busy, locales, selection } = useSession()
 
 interface MenuItem {
   label?: string
@@ -158,6 +160,10 @@ const menus = computed<Menu[]>(() => [
       { label: t('menu.selectAll'), shortcut: 'Ctrl+A', run: selectAll },
       { label: t('menu.deselect'), shortcut: 'Ctrl+D', run: deselect },
       { label: t('menu.inverse'), shortcut: 'Ctrl+Shift+I', run: invertSelection },
+      { label: '' },
+      { label: t('select.feather') + '…', run: () => promptSelectionAmount('feather'), enabled: () => selection.value !== null },
+      { label: t('select.expand') + '…', run: () => promptSelectionAmount('expand'), enabled: () => selection.value !== null },
+      { label: t('select.contract') + '…', run: () => promptSelectionAmount('contract'), enabled: () => selection.value !== null },
     ],
   },
   {
@@ -346,6 +352,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown))
 
     <StatusBar />
     <NewCanvasSheet />
+    <SelectionAmountSheet />
   </div>
 </template>
 

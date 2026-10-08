@@ -18,6 +18,7 @@ import { isFolder, visibleLeaves, type Transform } from '../model/types'
 import {
   attachCanvas,
   beginEdit,
+  magicWandAt,
   beginStroke,
   detachCanvas,
   draws,
@@ -42,8 +43,21 @@ import {
 } from '../state/session'
 
 const { t } = useI18n()
-const { manifest, canRender, canGPU, message, view, viewport, activeLayerId, selectedIds, tool, brush, selection } =
-  useSession()
+const {
+  manifest,
+  canRender,
+  canGPU,
+  message,
+  view,
+  viewport,
+  activeLayerId,
+  selectedIds,
+  tool,
+  brush,
+  selection,
+  wandTolerance,
+  wandContiguous,
+} = useSession()
 
 const host = ref<HTMLDivElement | null>(null)
 const canvas = ref<HTMLCanvasElement | null>(null)
@@ -314,6 +328,11 @@ function onPointerDown(event: PointerEvent): void {
       return
     case 'eyedropper':
       pickColor(dx, dy)
+      return
+    case 'wand':
+      // The fill needs the composited canvas, which is a readback, so it is not part of the drag
+      // machinery: one press, one selection.
+      void magicWandAt(dx, dy, wandTolerance.value, wandContiguous.value)
       return
     case 'move': {
       // A press on a handle transforms; a press anywhere else moves. That is one tool doing the two

@@ -5,7 +5,8 @@
     "close": "关闭",
     "none": "无",
     "working": "处理中…",
-    "px": "像素"
+    "px": "像素",
+    "ok": "确定"
   },
   "menu": {
     "file": "文件",
@@ -101,7 +102,10 @@
     "import": "导入…",
     "selectionActive": "选区已建立",
     "noSelection": "无选区",
-    "brushTip": "{size} 像素笔尖"
+    "brushTip": "{size} 像素笔尖",
+    "tolerance": "容差：",
+    "contiguous": "连续",
+    "sampleAllLayers": "对所有图层取样"
   },
   "layers": {
     "title": "图层",
@@ -355,5 +359,15 @@
     "distance": "距离",
     "blurNote": "模糊作用于整幅画布，因此会忽略图层蒙版本图层自身的不透明度。",
     "invertNote": "反相没有需要设置的参数。"
+  },
+  "select": {
+    "feather": "羽化",
+    "expand": "扩展",
+    "contract": "收缩",
+    "amount": "数量",
+    "nothingSelected": "当前没有选区。",
+    "featherNote": "以此像素数柔化选区边缘。",
+    "expandNote": "将选区向外扩展此像素数。",
+    "contractNote": "将选区向内收缩此像素数。"
   }
 }

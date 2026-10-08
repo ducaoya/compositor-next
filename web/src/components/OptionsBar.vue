@@ -13,7 +13,7 @@ import { TOOLS_BY_ID } from '../model/tools'
 import { fit, importImages, useSession, zoomTo } from '../state/session'
 
 const { t } = useI18n()
-const { tool, brush, foreground, selection } = useSession()
+const { tool, brush, foreground, selection, wandTolerance, wandContiguous } = useSession()
 
 const label = computed(() => {
   const definition = TOOLS_BY_ID.get(tool.value)
@@ -87,6 +87,19 @@ const isZoomLike = computed(() => tool.value === 'zoom' || tool.value === 'hand'
       </label>
       <label class="options__number">
         {{ t('options.flow') }} <input v-model.number="brush.flow" type="number" min="0" max="1" step="0.01" />
+      </label>
+    </template>
+
+    <!-- Magic Wand -->
+    <template v-else-if="tool === 'wand'">
+      <label class="options__number">
+        {{ t('options.tolerance') }} <input v-model.number="wandTolerance" type="number" min="0" max="255" />
+      </label>
+      <label class="options__check">
+        <input v-model="wandContiguous" type="checkbox" /> {{ t('options.contiguous') }}
+      </label>
+      <label class="options__select">
+        <select disabled><option>{{ t('options.sampleAllLayers') }}</option></select>
       </label>
     </template>
 

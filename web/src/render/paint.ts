@@ -146,6 +146,91 @@ export interface SelectionClip {
   canvasHeight: number
   /** Maps layer pixels to document pixels. */
   layerToDocument: DOMMatrix
+  /**
+   * The selection as coverage, when it is not a shape.
+   *
+   * A canvas clip takes a path, and coverage is not a path. Such a selection is applied by
+   * compositing the tip through the mask instead: draw the tip on a scratch, keep only what the
+   * mask covers, then put the result on the layer.
+   */
+  maskCanvas?: OffscreenCanvas | null
+  /** Maps document pixels to layer pixels, for placing the mask under the tip. */
+  documentToLayer?: DOMMatrix
+}
+
+/** Grown as needed and reused: a brush stamp is the hottest allocation in the app. */
+let scratch: OffscreenCanvas | null = null
+let scratchContext: OffscreenCanvasRenderingContext2D | null = null
+
+function scratchFor(size: number): OffscreenCanvasRenderingContext2D | null {
+  const side = Math.max(4, Math.ceil(size))
+  if (!scratch || scratch.width < side || scratch.height < side) {
+    scratch = new OffscreenCanvas(side, side)
+    scratchContext = scratch.getContext('2d')
+  }
+  if (!scratchContext) return null
+  scratchContext.setTransform(new DOMMatrix())
+  scratchContext.globalCompositeOperation = 'source-over'
+  scratchContext.globalAlpha = 1
+  scratchContext.clearRect(0, 0, side, side)
+  return scratchContext
+}
+
+/**
+ * One dab, limited to a coverage-mask selection.
+ *
+ * The tip is drawn on the shared scratch and cut down by the mask, then composited. Erasing goes
+ * through the same path with `destination-out`, so a soft selection erases softly.
+ */
+function stampThroughMask(
+  surface: LayerSurface,
+  x: number,
+  y: number,
+  radius: number,
+  settings: BrushSettings,
+  erasing: boolean,
+  clip: SelectionClip,
+  alpha: number,
+): DirtyRect | null {
+  const diameter = Math.ceil(radius * 2) + 2
+  const scratchCtx = scratchFor(diameter)
+  if (!scratch || !scratchCtx || !clip.maskCanvas) return null
+
+  const local = radius + 1
+  const gradient = scratchCtx.createRadialGradient(
+    local,
+    local,
+    hardnessInner(radius, settings.hardness),
+    local,
+    local,
+    radius,
+  )
+  const { r, g, b } = settings.color
+  gradient.addColorStop(0, erasing ? 'rgba(0,0,0,1)' : `rgba(${r},${g},${b},1)`)
+  gradient.addColorStop(1, erasing ? 'rgba(0,0,0,0)' : `rgba(${r},${g},${b},0)`)
+  scratchCtx.fillStyle = gradient
+  scratchCtx.beginPath()
+  scratchCtx.arc(local, local, radius, 0, Math.PI * 2)
+  scratchCtx.fill()
+
+  // Keep only what the selection covers. The mask is in document space and this context is in
+  // layer pixels, so the tip is placed through the same mapping the mask is drawn through.
+  scratchCtx.globalCompositeOperation = 'destination-in'
+  const toLayer = clip.documentToLayer ?? new DOMMatrix()
+  const origin = toLayer.transformPoint(new DOMPoint(x - local, y - local))
+  scratchCtx.setTransform(toLayer)
+  scratchCtx.translate(origin.x, origin.y)
+  scratchCtx.drawImage(clip.maskCanvas, 0, 0)
+  scratchCtx.setTransform(new DOMMatrix())
+
+  const context = surface.context
+  context.save()
+  context.globalAlpha = alpha
+  context.globalCompositeOperation = erasing ? 'destination-out' : 'source-over'
+  context.drawImage(scratch, x - local, y - local, diameter, diameter)
+  context.restore()
+
+  return { x: x - radius, y: y - radius, width: radius * 2, height: radius * 2 }
 }
 
 function applyClip(
@@ -178,6 +263,8 @@ export function stampDab(
   if (radius <= 0.05) return null
   const alpha = clamp01(settings.flow * settings.opacity)
   if (alpha <= 0) return null
+
+  if (clip?.maskCanvas) return stampThroughMask(surface, x, y, radius, settings, erasing, clip, alpha)
 
   const context = surface.context
   context.save()
@@ -237,6 +324,33 @@ export function fillSurface(
   clip: SelectionClip | null,
 ): DirtyRect {
   const context = surface.context
+  const toLayer = clip?.maskCanvas ? (clip.documentToLayer ?? new DOMMatrix()) : null
+
+  if (clip?.maskCanvas && toLayer) {
+    context.save()
+    if (color) {
+      // The colour goes on a scratch, the mask cuts it down, and what is left is laid on top.
+      const painted = new OffscreenCanvas(surface.width, surface.height)
+      const paintedContext = painted.getContext('2d')
+      if (paintedContext) {
+        paintedContext.fillStyle = `rgb(${color.r},${color.g},${color.b})`
+        paintedContext.fillRect(0, 0, surface.width, surface.height)
+        paintedContext.globalCompositeOperation = 'destination-in'
+        paintedContext.setTransform(toLayer)
+        paintedContext.drawImage(clip.maskCanvas, 0, 0)
+      }
+      context.globalCompositeOperation = 'source-over'
+      context.drawImage(painted, 0, 0)
+    } else {
+      // Erasing by the mask's own alpha clears exactly the coverage, soft edges included.
+      context.globalCompositeOperation = 'destination-out'
+      context.setTransform(toLayer)
+      context.drawImage(clip.maskCanvas, 0, 0)
+    }
+    context.restore()
+    return { x: 0, y: 0, width: surface.width, height: surface.height }
+  }
+
   context.save()
   applyClip(context, clip)
   context.globalCompositeOperation = color ? 'source-over' : 'destination-out'

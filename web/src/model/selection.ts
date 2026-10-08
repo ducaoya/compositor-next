@@ -6,7 +6,9 @@
  * mask; when feathering and the lasso arrive, this type grows into one.
  */
 
-export type SelectionKind = 'rectangle' | 'ellipse' | 'polygon'
+import { maskBounds, type Mask } from './selectionMask'
+
+export type SelectionKind = 'rectangle' | 'ellipse' | 'polygon' | 'mask'
 
 export interface Selection {
   kind: SelectionKind
@@ -19,6 +21,51 @@ export interface Selection {
   inverted: boolean
   /** The outline, for a polygon only. */
   points?: [number, number][]
+  /**
+   * Coverage at document resolution, present once the selection stopped being a shape.
+   *
+   * Feather, Expand, Contract and the Magic Wand all produce one; the marquee tools do not. The
+   * shape stays alongside it when there is one, so the marching ants still have an outline to draw
+   * and the fast clip path is still available.
+   */
+  mask?: Mask | null
+}
+
+/** A selection that is coverage rather than a shape. */
+export function maskSelection(mask: Mask, inverted = false): Selection {
+  const bounds = maskBounds(mask) ?? { x: 0, y: 0, width: 0, height: 0 }
+  return {
+    kind: 'mask',
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    inverted,
+    mask,
+  }
+}
+
+/** The same selection carrying a mask, with its bounds refreshed from the coverage. */
+export function withMask(selection: Selection, mask: Mask): Selection {
+  const bounds = maskBounds(mask) ?? { x: 0, y: 0, width: 0, height: 0 }
+  return { ...selection, x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, mask }
+}
+
+/** The coverage of a point, 0–255, whatever form the selection takes. */
+export function selectionCoverage(selection: Selection | null, x: number, y: number): number {
+  if (!selection) return 255
+  if (selection.mask) {
+    const px = Math.floor(x)
+    const py = Math.floor(y)
+    if (px < 0 || py < 0 || px >= selection.mask.width || py >= selection.mask.height) {
+      return selection.inverted ? 255 : 0
+    }
+    const value = selection.mask.data[py * selection.mask.width + px]
+    return selection.inverted ? 255 - value : value
+  }
+  const inside = shapeContains(selection, x, y)
+  const chosen = selection.inverted ? !inside : inside
+  return chosen ? 255 : 0
 }
 
 /**
@@ -95,9 +142,7 @@ export function inverted(selection: Selection): Selection {
 
 /** Whether a document point is selected — used to clip painting and to report the pointer state. */
 export function selectionContains(selection: Selection | null, x: number, y: number): boolean {
-  if (!selection) return true
-  const inside = shapeContains(selection, x, y)
-  return selection.inverted ? !inside : inside
+  return selectionCoverage(selection, x, y) > 0
 }
 
 function shapeContains(selection: Selection, x: number, y: number): boolean {
@@ -134,6 +179,11 @@ function polygonContains(points: readonly [number, number][], x: number, y: numb
 
 /** Draws the shape into the current path, without beginning or clipping it. */
 function addShape(path: CanvasPath, selection: Selection): void {
+  if (selection.kind === 'mask') {
+    // Nothing to clip against: a mask is applied by compositing, not by a path. The caller checks
+    // for that; an empty path here leaves the canvas unclipped rather than clipping it all away.
+    return
+  }
   if (selection.kind === 'polygon') {
     const points = selection.points ?? []
     if (points.length === 0) return
@@ -203,7 +253,9 @@ export function selectionOutline(selection: Selection | null, canvasWidth: numbe
   if (!selection) return ''
   const shapes: string[] = []
   if (selection.inverted) shapes.push(`M0 0H${canvasWidth}V${canvasHeight}H0Z`)
-  if (selection.kind === 'polygon') {
+  if (selection.kind === 'mask') {
+    if (selection.mask) shapes.push(maskOutline(selection.mask))
+  } else if (selection.kind === 'polygon') {
     const points = selection.points ?? []
     if (points.length > 2) {
       const [first, ...rest] = points
@@ -220,4 +272,37 @@ export function selectionOutline(selection: Selection | null, canvasWidth: numbe
     shapes.push(`M${cx - rx} ${cy}A${rx} ${ry} 0 1 0 ${cx + rx} ${cy}A${rx} ${ry} 0 1 0 ${cx - rx} ${cy}Z`)
   }
   return shapes.join(' ')
+}
+
+
+/**
+ * The boundary of a coverage mask, as an SVG path.
+ *
+ * Every horizontal run of selected pixels contributes its top edge where the row above is empty,
+ * its bottom edge where the row below is, and a vertical at each end. That is not a traced contour
+ * — a diagonal edge comes out as a staircase — but it needs no tracing pass, and it is what the
+ * marching ants want to draw anyway.
+ */
+export function maskOutline(mask: Mask, threshold = 128): string {
+  const parts: string[] = []
+  const set = (x: number, y: number): boolean =>
+    x >= 0 && y >= 0 && x < mask.width && y < mask.height && mask.data[y * mask.width + x] >= threshold
+
+  for (let y = 0; y < mask.height; y += 1) {
+    let x = 0
+    while (x < mask.width) {
+      if (!set(x, y)) {
+        x += 1
+        continue
+      }
+      const start = x
+      while (x < mask.width && set(x, y)) x += 1
+      const end = x
+      if (!set(start, y - 1)) parts.push(`M${start} ${y}H${end}`)
+      if (!set(start, y + 1)) parts.push(`M${start} ${y + 1}H${end}`)
+      if (!set(start - 1, y)) parts.push(`M${start} ${y}V${y + 1}`)
+      if (!set(end, y)) parts.push(`M${end} ${y}V${y + 1}`)
+    }
+  }
+  return parts.join('')
 }

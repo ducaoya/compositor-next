@@ -5,7 +5,8 @@
     "close": "Close",
     "none": "None",
     "working": "Working…",
-    "px": "px"
+    "px": "px",
+    "ok": "OK"
   },
   "menu": {
     "file": "File",
@@ -101,7 +102,10 @@
     "import": "Import…",
     "selectionActive": "Selection active",
     "noSelection": "No selection",
-    "brushTip": "{size} px tip"
+    "brushTip": "{size} px tip",
+    "tolerance": "Tolerance:",
+    "contiguous": "Contiguous",
+    "sampleAllLayers": "Sample All Layers"
   },
   "layers": {
     "title": "Layers",
@@ -355,5 +359,15 @@
     "distance": "Distance",
     "blurNote": "The blur runs on the whole canvas, so it ignores the layer mask and this layer’s own opacity.",
     "invertNote": "Invert has nothing to set."
+  },
+  "select": {
+    "feather": "Feather",
+    "expand": "Expand",
+    "contract": "Contract",
+    "amount": "Amount",
+    "nothingSelected": "Nothing is selected.",
+    "featherNote": "Softens the edge over this many pixels.",
+    "expandNote": "Grows the selection outward by this many pixels.",
+    "contractNote": "Shrinks the selection inward by this many pixels."
   }
 }

@@ -28,10 +28,21 @@ import {
   ellipseSelection,
   fullSelection,
   inverted,
+  maskSelection,
   rectSelection,
   selectionContains,
+  withMask,
   type Selection,
 } from '../model/selection'
+import {
+  blurMask,
+  dilateMask,
+  erodeMask,
+  invertMask,
+  magicWandMask,
+  maskFromShape,
+  type Mask,
+} from '../model/selectionMask'
 import { SHORTCUT_CYCLES, type ToolId } from '../model/tools'
 import {
   DEFAULT_LIMITS,
@@ -102,11 +113,27 @@ const brush = reactive<BrushSettings>({
   color: { r: 235, g: 235, b: 235 },
 })
 const selection = ref<Selection | null>(null)
+/**
+ * The selection's coverage as a canvas, for the brush and the fill.
+ *
+ * Built when the selection changes rather than per dab: a brush stamp is the hottest path in the
+ * app, and turning a mask into an image there would be the whole cost of painting.
+ */
+const selectionMaskCanvas = shallowRef<OffscreenCanvas | null>(null)
+/** What the user is being asked for: a feather radius, or how far to grow or shrink. */
+export const selectionAmountPrompt = reactive({
+  open: false,
+  mode: 'feather' as 'feather' | 'expand' | 'contract',
+  amount: 5,
+})
 const paintStore = new PaintStore()
 /** Decoded pixel sizes, for mapping between layer pixels and the document. */
 const layerImages = reactive(new Map<string, { width: number; height: number }>())
 /** Which layers the brush changes colour with, so an erase uses the eraser tip. */
 const erasing = ref(false)
+/** The Magic Wand's settings, which its options bar edits. */
+const wandTolerance = ref(32)
+const wandContiguous = ref(true)
 
 // `structuredClone` refuses a Vue proxy, and the document is JSON by definition, so the history
 // snapshots are taken the same way the format serializes them.
@@ -204,6 +231,9 @@ export function useSession() {
     locale,
     activeAdjustment,
     gpuErrors,
+    selectionMaskCanvas,
+    wandTolerance,
+    wandContiguous,
   }
 }
 
@@ -825,11 +855,14 @@ export function layerPixelScale(layer: LayerRecord): number {
 
 function currentSelectionClip(layer: LayerRecord): import('../render/paint').SelectionClip | null {
   if (!selection.value || !manifest.value) return null
+  const matrix = layerMatrix(layer)
   return {
     selection: selection.value,
     canvasWidth: manifest.value.width,
     canvasHeight: manifest.value.height,
-    layerToDocument: layerMatrix(layer),
+    layerToDocument: matrix,
+    maskCanvas: selectionMaskCanvas.value,
+    documentToLayer: matrix.inverse(),
   }
 }
 
@@ -972,21 +1005,124 @@ export function pickColor(x: number, y: number): boolean {
 
 export function setSelection(next: Selection | null): void {
   selection.value = next
+  selectionMaskCanvas.value = next?.mask ? maskToCanvas(next.mask) : null
+}
+
+/** The coverage as an image whose alpha is the selection. */
+function maskToCanvas(mask: Mask): OffscreenCanvas | null {
+  const canvas = new OffscreenCanvas(mask.width, mask.height)
+  const context = canvas.getContext('2d')
+  if (!context) return null
+  const image = new ImageData(mask.width, mask.height)
+  for (let index = 0; index < mask.data.length; index += 1) {
+    image.data[index * 4] = 255
+    image.data[index * 4 + 1] = 255
+    image.data[index * 4 + 2] = 255
+    image.data[index * 4 + 3] = mask.data[index]
+  }
+  context.putImageData(image, 0, 0)
+  return canvas
+}
+
+/**
+ * The selection as coverage, whatever form it currently takes.
+ *
+ * A shape is rasterised on demand, which is what lets Feather follow a marquee drag without the
+ * marquee having to build a mask on every pointer move.
+ */
+function selectionAsMask(): Mask | null {
+  const current = selection.value
+  const manifestNow = manifest.value
+  if (!current || !manifestNow) return null
+  if (current.mask) return current.mask
+  if (current.kind === 'mask') return null
+  const mask = maskFromShape(
+    { kind: current.kind, bounds: { x: current.x, y: current.y, width: current.width, height: current.height }, points: current.points },
+    manifestNow.width,
+    manifestNow.height,
+  )
+  return current.inverted ? invertMask(mask) : mask
+}
+
+/** Feather, Expand, Contract and the wand all land here. */
+function applySelectionMask(mask: Mask | null, label: string): void {
+  if (!mask) {
+    setSelection(null)
+    return
+  }
+  const next = maskSelection(mask)
+  // The shape is kept so the marching ants keep their outline; the coverage is what counts.
+  const current = selection.value
+  setSelection(current && current.kind !== 'mask' ? { ...withMask(current, mask), kind: current.kind } : next)
+  void label
+}
+
+export function promptSelectionAmount(mode: 'feather' | 'expand' | 'contract'): void {
+  if (!selection.value) return
+  selectionAmountPrompt.mode = mode
+  selectionAmountPrompt.amount = mode === 'feather' ? 5 : 5
+  selectionAmountPrompt.open = true
+}
+
+/** Softens the edge of the selection by `radius`, the same Gaussian the reference uses. */
+export function featherSelection(radius: number): void {
+  const mask = selectionAsMask()
+  if (!mask || radius <= 0) return
+  setSelection(null)
+  applySelectionMask(blurMask(mask, radius / 2), 'Feather')
+}
+
+export function expandSelection(amount: number): void {
+  const mask = selectionAsMask()
+  if (!mask || amount <= 0) return
+  setSelection(null)
+  applySelectionMask(dilateMask(mask, amount), 'Expand')
+}
+
+export function contractSelection(amount: number): void {
+  const mask = selectionAsMask()
+  if (!mask || amount <= 0) return
+  setSelection(null)
+  applySelectionMask(erodeMask(mask, amount), 'Contract')
+}
+
+/**
+ * The Magic Wand: a flood fill from the point clicked.
+ *
+ * It samples the composited canvas rather than the active layer, which is Photoshop's Sample All
+ * Layers behaviour and the one that matches what the pointer is pointing at. The readback is the
+ * only time a frame leaves the GPU for something other than a file.
+ */
+export async function magicWandAt(x: number, y: number, tolerance: number, contiguous: boolean): Promise<void> {
+  const target = compositor.value
+  if (!target) return
+  await guard(async () => {
+    const flat = await target.flatten()
+    if (!flat) return
+    const mask = magicWandMask(flat.data, flat.width, flat.height, x, y, tolerance, contiguous)
+    const chosen = selectionContains(selection.value, x, y)
+    void chosen
+    setSelection(maskSelection(mask))
+  })
 }
 
 export function selectAll(): void {
   const current = manifest.value
   if (!current) return
-  selection.value = fullSelection(current.width, current.height)
+  setSelection(fullSelection(current.width, current.height))
 }
 
 export function deselect(): void {
-  selection.value = null
+  setSelection(null)
 }
 
 export function invertSelection(): void {
-  if (!selection.value) return
-  selection.value = inverted(selection.value)
+  const current = selection.value
+  if (!current) return
+  // With a mask there is coverage to flip; a shape is inverted by flipping what it means, which
+  // keeps Select All and the marquees on the cheap path.
+  if (current.mask) setSelection({ ...current, mask: invertMask(current.mask) })
+  else selection.value = inverted(current)
 }
 
 /** The selection a marquee drag describes. */
@@ -1351,11 +1487,18 @@ if (typeof window !== 'undefined') {
         return paintStore
       },
       selectTool,
+      featherSelection,
+      expandSelection,
+      contractSelection,
+      magicWandAt,
       selectAll,
       deselect,
       invertSelection,
       get message() {
         return message.value
+      },
+      get selectionMaskCanvas() {
+        return selectionMaskCanvas.value
       },
       get gpuErrors() {
         return gpuErrors.value

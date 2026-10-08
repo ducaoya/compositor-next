@@ -90,7 +90,7 @@ export const TOOLS: ToolDefinition[] = [
     id: 'wand',
     labelKey: 'tools.wand',
     shortcut: 'W',
-    implemented: false,
+    implemented: true,
     icon: `
       <path d="M3.5 20.5 13 11" stroke-width="1.8" />
       <path d="M16.5 3v4M20.5 7h-4M18.8 9.6 21 11.8M14.2 9.6 12 11.8" />`,
