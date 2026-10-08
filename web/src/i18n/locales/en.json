@@ -59,7 +59,8 @@
     "flipCanvasV": "Flip Canvas Vertical",
     "invertMask": "Invert Mask",
     "blurMask": "Blur Mask",
-    "featherMask": "Feather Mask"
+    "featherMask": "Feather Mask",
+    "layerEffects": "Layer Effects"
   },
   "tools": {
     "move": "Move",
@@ -414,5 +415,29 @@
     "apply": "Apply",
     "cancel": "Cancel",
     "hint": "Drag a rectangle, then press Enter."
+  },
+  "effects": {
+    "title": "Layer Effects",
+    "add": "Add an effect",
+    "empty": "This layer has no effects.",
+    "enabled": "Visible",
+    "note": "Effects are baked into the layer when it is drawn, so they follow its transform, opacity and mask.",
+    "kind": {
+      "stroke": "Stroke",
+      "shadow": "Drop Shadow",
+      "colorOverlay": "Color Overlay",
+      "innerShadow": "Inner Shadow",
+      "outerGlow": "Outer Glow",
+      "innerGlow": "Inner Glow"
+    },
+    "size": "Size",
+    "angle": "Angle",
+    "distance": "Distance",
+    "blur": "Blur",
+    "color": "Color",
+    "opacity": "Opacity",
+    "inside": "Inside",
+    "position": "Position",
+    "outside": "Outside"
   }
 }

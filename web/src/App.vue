@@ -14,6 +14,7 @@ import CanvasStage from './components/CanvasStage.vue'
 import LayersPanel from './components/LayersPanel.vue'
 import NewCanvasSheet from './components/NewCanvasSheet.vue'
 import DimensionSheet from './components/DimensionSheet.vue'
+import EffectsSheet from './components/EffectsSheet.vue'
 import SelectionAmountSheet from './components/SelectionAmountSheet.vue'
 import OptionsBar from './components/OptionsBar.vue'
 import PropertiesPanel from './components/PropertiesPanel.vue'
@@ -41,6 +42,7 @@ import {
   exportJPEG,
   flipCanvas,
   installLanguagePack,
+  openEffectsSheet,
   invertSelection,
   loadLanguagePacks,
   moveActive,
@@ -190,6 +192,9 @@ const menus = computed<Menu[]>(() => [
       { label: t('menu.invertMask'), run: () => editLayerMask('invert'), enabled: () => activeLayer.value?.maskFile !== undefined },
       { label: t('menu.blurMask'), run: () => editLayerMask('blur', 10), enabled: () => activeLayer.value?.maskFile !== undefined },
       { label: t('menu.featherMask'), run: () => editLayerMask('feather', 20), enabled: () => activeLayer.value?.maskFile !== undefined },
+      { label: '' },
+      { label: '' },
+      { label: t('menu.layerEffects') + '…', run: openEffectsSheet, enabled: () => activeLayer.value !== undefined },
       { label: '' },
       { label: t('menu.deleteLayer'), run: deleteSelected },
     ],
@@ -423,6 +428,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown))
     <NewCanvasSheet />
     <SelectionAmountSheet />
     <DimensionSheet />
+    <EffectsSheet />
   </div>
 </template>
 

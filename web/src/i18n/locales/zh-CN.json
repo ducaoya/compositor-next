@@ -59,7 +59,8 @@
     "flipCanvasV": "垂直翻转画布",
     "invertMask": "反相蒙版",
     "blurMask": "模糊蒙版",
-    "featherMask": "羽化蒙版"
+    "featherMask": "羽化蒙版",
+    "layerEffects": "图层样式"
   },
   "tools": {
     "move": "移动",
@@ -414,5 +415,29 @@
     "apply": "应用",
     "cancel": "取消",
     "hint": "拖出一个矩形，然后按回车。"
+  },
+  "effects": {
+    "title": "图层样式",
+    "add": "添加效果",
+    "empty": "该图层没有图层样式。",
+    "enabled": "可见",
+    "note": "图层样式在绘制时烘焙进图层，因此会跟随它的变换、不透明度与蒙版。",
+    "kind": {
+      "stroke": "描边",
+      "shadow": "投影",
+      "colorOverlay": "颜色叠加",
+      "innerShadow": "内阴影",
+      "outerGlow": "外发光",
+      "innerGlow": "内发光"
+    },
+    "size": "大小",
+    "angle": "角度",
+    "distance": "距离",
+    "blur": "扩展",
+    "color": "颜色",
+    "opacity": "不透明度",
+    "inside": "内部",
+    "position": "位置",
+    "outside": "外部"
   }
 }

@@ -64,6 +64,13 @@ import {
   type Manifest,
 } from '../model/types'
 import { Compositor, type DrawItem } from '../render/compositor'
+import { renderEffects } from '../render/effects'
+import {
+  defaultEffect,
+  hasEffects,
+  type EffectKey,
+  type LayerEffects,
+} from '../model/effects'
 import {
   ADJUSTMENT_KINDS,
   buildLut,
@@ -144,6 +151,26 @@ const selectionMaskCanvas = shallowRef<OffscreenCanvas | null>(null)
 const maskEditingRef = ref(false)
 /** Surfaces whose pixels have been painted, so a save re-encodes those and nothing else. */
 const modifiedSurfaces = new Set<string>()
+/**
+ * How many times a surface has been written, so an effects raster can tell whether the pixels it
+ * was built from are still current. Coarser than it looks: only the layer that was painted on
+ * changes its number, so painting does not rebuild every other layer's effects.
+ */
+const surfaceVersion = new Map<string, number>()
+/** Effect rasters by layer, with the signature they were built from. */
+const effectRasters = new Map<string, { signature: string; transform: LayerRecord['transform'] }>()
+const effectTextures = new Map<string, GPUTexture>()
+/**
+ * Bumped whenever an effect raster is built or dropped.
+ *
+ * `effectTextures` is a plain map — it holds GPU handles, which must not be proxied — so nothing
+ * tells the draw list that it changed. Without this the raster is built and then ignored, because
+ * the computed that reads it has no reason to run again.
+ */
+const effectsVersion = ref(0)
+/** Which effect the panel is showing, if any. */
+const effectsSheetOpen = ref(false)
+const effectsEditingKey = ref<EffectKey | null>(null)
 /** What the user is being asked for: a feather radius, or how far to grow or shrink. */
 /** The rectangle the crop tool has dragged out, before it is applied. */
 const cropRect = ref<{ x: number; y: number; width: number; height: number } | null>(null)
@@ -235,6 +262,8 @@ export const redoLabel = computed(() => (historyVersion.value >= 0 ? history.red
 
 /** What the compositor draws this frame, bottom to top: layers and adjustments in stack order. */
 export const draws = computed<DrawItem[]>(() => {
+  // Read so a new effect raster re-runs this, and so the version is a dependency.
+  void effectsVersion.value
   const current = manifest.value
   if (!current) return []
   const byId = indexLayers(current)
@@ -254,12 +283,17 @@ export const draws = computed<DrawItem[]>(() => {
       })
       continue
     }
+    // A layer with effects draws the raster those effects were baked into: it is larger than the
+    // layer, and its mask is already part of it, so neither the transform nor the mask of the
+    // layer itself applies any more.
+    const baked = effectTextures.get(layer.id)
+    const bakedTransform = effectRasters.get(layer.id)?.transform
     result.push({
       kind: 'layer',
       id: layer.id,
-      texture: textures.get(assetKey(layer.id, 'image')) ?? null,
-      mask: textures.get(assetKey(layer.id, 'mask')) ?? null,
-      transform: layer.transform,
+      texture: baked ?? textures.get(assetKey(layer.id, 'image')) ?? null,
+      mask: baked ? null : (textures.get(assetKey(layer.id, 'mask')) ?? null),
+      transform: baked && bakedTransform ? bakedTransform : layer.transform,
       opacity,
       blendMode: blendModeOf(layer),
     })
@@ -327,6 +361,15 @@ export function useSession() {
     loadMaskSelection,
     drawGradient,
     drawShape,
+    effectsSheetOpen,
+    effectsEditingKey,
+    activeLayerEffects,
+    openEffectsSheet,
+    closeEffectsSheet,
+    toggleEffect,
+    patchEffect,
+    setEffectEnabled,
+    flushEffects,
   }
 }
 
@@ -560,6 +603,9 @@ async function adopt(opened: OpenedProject): Promise<void> {
   textures.clear()
   paintStore.clear()
   modifiedSurfaces.clear()
+  surfaceVersion.clear()
+  effectRasters.clear()
+  effectTextures.clear()
   maskEditingRef.value = false
   layerImages.clear()
   selection.value = null
@@ -1363,6 +1409,65 @@ function applyClipForFill(
   if (clip) clipToSelection(context, clip.selection, clip.canvasWidth, clip.canvasHeight)
 }
 
+/** The effects on a layer, typed. The manifest keeps them as opaque JSON. */
+function layerEffects(layer: LayerRecord): LayerEffects | null {
+  return (layer.effects as LayerEffects | undefined) ?? null
+}
+
+/** Whether the active layer has anything the Effects panel should open for. */
+export const activeLayerEffects = computed<LayerEffects | null>(() => {
+  const layer = activeLayer.value
+  return layer ? layerEffects(layer) : null
+})
+
+export function openEffectsSheet(): void {
+  if (!activeLayer.value) return
+  const effects = layerEffects(activeLayer.value)
+  effectsEditingKey.value = effects && hasEffects(effects)
+    ? (Object.keys(effects).find((key) => (effects as Record<string, unknown>)[key]) as EffectKey | undefined) ?? null
+    : null
+  effectsSheetOpen.value = true
+}
+
+export function closeEffectsSheet(): void {
+  effectsSheetOpen.value = false
+}
+
+/** Turns one effect on with its defaults, or off and gone. */
+export function toggleEffect(key: EffectKey): void {
+  const layer = activeLayer.value
+  if (!layer) return
+  edit(`Layer Effects`, (current) => {
+    const record = current.layers.find((item) => item.id === layer.id)
+    if (!record) return false
+    const effects: LayerEffects = { ...((record.effects as LayerEffects | undefined) ?? {}) }
+    if (effects[key]) delete effects[key]
+    else effects[key] = defaultEffect(key) as never
+    record.effects = Object.keys(effects).length > 0 ? effects : undefined
+    return true
+  })
+  const effects = layerEffects(activeLayer.value ?? layer)
+  effectsEditingKey.value = effects?.[key] ? key : null
+}
+
+/** Merges a change into one effect. A drag wraps this in beginEdit/endEdit. */
+export function patchEffect(key: EffectKey, patch: Record<string, unknown>): void {
+  const layer = activeLayer.value
+  if (!layer) return
+  const record = manifest.value?.layers.find((item) => item.id === layer.id)
+  if (!record) return
+  const effects: LayerEffects = { ...((record.effects as LayerEffects | undefined) ?? {}) }
+  const existing = (effects[key] as Record<string, unknown> | undefined) ?? {}
+  effects[key] = { ...existing, ...patch } as never
+  record.effects = effects
+}
+
+export function setEffectEnabled(key: EffectKey, enabled: boolean): void {
+  beginEdit('Layer Effects')
+  patchEffect(key, { enabled })
+  endEdit()
+}
+
 // MARK: - Compositing on the CPU
 
 /**
@@ -2056,7 +2161,55 @@ export function flushPaint(): void {
     const texture = target.setLayerTexture(key, surface.canvas, surface.width, surface.height, rect)
     if (texture) textures.set(key, markRaw(texture))
     if (surfaceKind !== 'mask') layerImages.set(layerId, { width: surface.width, height: surface.height })
+    surfaceVersion.set(surfaceId, (surfaceVersion.get(surfaceId) ?? 0) + 1)
     paintStore.markClean(surface)
+  }
+  flushEffects()
+}
+
+/**
+ * Rebuilds the effect rasters whose layer or effects have changed, and uploads them.
+ *
+ * Called every frame, so the common case is a signature comparison and nothing else: a raster is
+ * only redrawn when the effect settings or the pixels underneath them moved.
+ */
+export function flushEffects(): void {
+  const target = compositor.value
+  const current = manifest.value
+  if (!target || !current) return
+  const wanted = new Set<string>()
+
+  for (const layer of visibleLeaves(current.layers)) {
+    if (isFolder(layer)) continue
+    const effects = layerEffects(layer)
+    if (!hasEffects(effects)) continue
+    const surface = paintStore.surface(layer.id, 'image')
+    if (!surface) continue
+    wanted.add(layer.id)
+    const signature = [
+      JSON.stringify(effects),
+      `${surface.width}x${surface.height}`,
+      surfaceVersion.get(assetKey(layer.id, 'image')) ?? 0,
+      surfaceVersion.get(assetKey(layer.id, 'mask')) ?? 0,
+    ].join('|')
+    const cached = effectRasters.get(layer.id)
+    if (cached?.signature === signature) continue
+
+    const rendered = renderEffects(surface, paintStore.surface(layer.id, 'mask') ?? null, effects!, layer.transform)
+    if (!rendered) continue
+    const key = `effect|${layer.id}`
+    const texture = target.setLayerTexture(key, rendered.canvas, rendered.canvas.width, rendered.canvas.height)
+    effectTextures.set(layer.id, markRaw(texture))
+    effectRasters.set(layer.id, { signature, transform: rendered.transform })
+    effectsVersion.value += 1
+  }
+
+  for (const id of [...effectRasters.keys()]) {
+    if (wanted.has(id)) continue
+    effectRasters.delete(id)
+    effectTextures.delete(id)
+    target.disposeLayerTexture(`effect|${id}`)
+    effectsVersion.value += 1
   }
 }
 

@@ -21,6 +21,7 @@ import {
   endEdit,
   groupSelected,
   hasTexture,
+  openEffectsSheet,
   paintTarget,
   removeLayerMask,
   setMaskEditing,
@@ -288,7 +289,15 @@ function select01(layerId: string): void {
       >
         ▣
       </button>
-      <button class="icon" disabled :title="t('layers.layerEffects')">fx</button>
+      <button
+        class="icon"
+        :class="{ 'icon--on': activeLayer?.effects !== undefined }"
+        :title="t('layers.layerEffects')"
+        :disabled="!activeLayer || isFolder(activeLayer)"
+        @click="openEffectsSheet()"
+      >
+        fx
+      </button>
       <button class="icon" disabled :title="t('layers.adjustmentLayer')">◐</button>
       <span class="panel__footer-gap" />
       <button class="icon" :title="t('layers.group')" @click="groupSelected">▤</button>
@@ -592,6 +601,11 @@ function select01(layerId: string): void {
 .icon:disabled {
   opacity: 0.35;
   cursor: default;
+}
+
+/* A layer that has effects shows it, as Photoshop's fx badge does. */
+.icon--on {
+  color: #7fb3e8;
 }
 
 .panel__count {
