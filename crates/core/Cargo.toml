@@ -1,0 +1,19 @@
+[package]
+name = "compositor-core"
+description = "The .comp project format: manifest schema, validation and package I/O."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_SystemInformation", "Win32_Foundation"] }
+
+[dev-dependencies]
+tempfile = "3"
+png = "0.17"

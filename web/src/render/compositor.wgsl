@@ -1,0 +1,264 @@
+// The canvas compositor.
+//
+// Two passes. The first composites one layer at a time into an offscreen accumulation texture,
+// ping-ponging between two of them because a pass cannot read its own render target. The second
+// draws that accumulation onto the swapchain with the checkerboard and the view transform.
+//
+// Blend maths works on **sRGB-encoded values, not linear light**, exactly as Photoshop and the
+// reference app do, and `web/src/model/blend.ts` is the same maths in TypeScript. The mode numbers
+// below are positions in `BLEND_MODES`; a test checks the two lists agree.
+
+struct CompositeParams {
+  // x, y: canvas size in pixels; z: layer opacity; w: blend mode index
+  a: vec4f,
+  // x, y: layer origin; z, w: layer size
+  b: vec4f,
+  // x: rotation in radians; y: flipX; z: flipY; w: 1 when a mask is bound
+  c: vec4f,
+  // x: 1 when sampling must be nearest
+  d: vec4f,
+};
+
+struct DisplayParams {
+  // x, y: screen size in pixels; z: zoom
+  a: vec4f,
+  // x, y: pan, in screen pixels
+  b: vec4f,
+  // x, y: canvas size in pixels
+  c: vec4f,
+};
+
+// The two passes use different bind group indices so that one shader module can hold both: WGSL
+// requires every (group, binding) pair to be declared once.
+@group(0) @binding(0) var<uniform> displayParams: DisplayParams;
+@group(0) @binding(1) var accumTex: texture_2d<f32>;
+@group(0) @binding(2) var displaySampler: sampler;
+
+@group(1) @binding(0) var<uniform> params: CompositeParams;
+@group(1) @binding(1) var srcTex: texture_2d<f32>;
+@group(1) @binding(2) var dstTex: texture_2d<f32>;
+@group(1) @binding(3) var maskTex: texture_2d<f32>;
+@group(1) @binding(4) var linearSampler: sampler;
+@group(1) @binding(5) var nearestSampler: sampler;
+
+// MARK: - Blend helpers
+
+fn lum(c: vec3f) -> f32 {
+  return 0.3 * c.r + 0.59 * c.g + 0.11 * c.b;
+}
+
+fn sat(c: vec3f) -> f32 {
+  return max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
+}
+
+fn clip_color(c: vec3f) -> vec3f {
+  let l = lum(c);
+  let n = min(c.r, min(c.g, c.b));
+  let x = max(c.r, max(c.g, c.b));
+  var out = c;
+  if (n < 0.0) {
+    out = vec3f(l) + (out - vec3f(l)) * l / (l - n);
+  }
+  if (x > 1.0) {
+    out = vec3f(l) + (out - vec3f(l)) * (1.0 - l) / (x - l);
+  }
+  return out;
+}
+
+fn set_lum(c: vec3f, l: f32) -> vec3f {
+  return clip_color(c + vec3f(l - lum(c)));
+}
+
+fn set_sat(c: vec3f, s: f32) -> vec3f {
+  let mn = min(c.r, min(c.g, c.b));
+  let mx = max(c.r, max(c.g, c.b));
+  if (mx - mn <= 0.0) {
+    return vec3f(0.0);
+  }
+  let k = s / (mx - mn);
+  return vec3f((c.r - mn) * k, (c.g - mn) * k, (c.b - mn) * k);
+}
+
+fn color_burn(cb: vec3f, cs: vec3f) -> vec3f {
+  let burned = vec3f(1.0) - min(vec3f(1.0), (vec3f(1.0) - cb) / max(cs, vec3f(1e-6)));
+  return select(burned, vec3f(0.0), cs <= vec3f(0.0));
+}
+
+fn color_dodge(cb: vec3f, cs: vec3f) -> vec3f {
+  let dodged = min(vec3f(1.0), cb / max(vec3f(1.0) - cs, vec3f(1e-6)));
+  return select(dodged, vec3f(1.0), cs >= vec3f(1.0));
+}
+
+fn hard_light(cb: vec3f, cs: vec3f) -> vec3f {
+  let dark = 2.0 * cb * cs;
+  let light = vec3f(1.0) - 2.0 * (vec3f(1.0) - cb) * (vec3f(1.0) - cs);
+  return select(light, dark, cs <= vec3f(0.5));
+}
+
+fn soft_light(cb: vec3f, cs: vec3f) -> vec3f {
+  let curve = select(sqrt(cb), ((16.0 * cb - 12.0) * cb + 4.0) * cb, cb <= vec3f(0.25));
+  let dark = cb - (vec3f(1.0) - 2.0 * cs) * cb * (vec3f(1.0) - cb);
+  let light = cb + (2.0 * cs - 1.0) * (curve - cb);
+  return select(light, dark, cs <= vec3f(0.5));
+}
+
+fn vivid_light(cb: vec3f, cs: vec3f) -> vec3f {
+  return select(color_dodge(cb, 2.0 * cs - 1.0), color_burn(cb, 2.0 * cs), cs <= vec3f(0.5));
+}
+
+fn pin_light(cb: vec3f, cs: vec3f) -> vec3f {
+  return select(max(cb, 2.0 * cs - 1.0), min(cb, 2.0 * cs), cs <= vec3f(0.5));
+}
+
+fn divide(cb: vec3f, cs: vec3f) -> vec3f {
+  let quotients = cb / max(cs, vec3f(1e-6));
+  return select(quotients, vec3f(1.0), cs <= vec3f(0.0));
+}
+
+// MARK: - The blend function B(Cb, Cs)
+
+fn blend(mode: u32, cb: vec3f, cs: vec3f) -> vec3f {
+  switch mode {
+    // 0. Normal
+    case 0u: { return cs; }
+    // 1. Darken
+    case 1u: { return min(cb, cs); }
+    // 2. Multiply
+    case 2u: { return cb * cs; }
+    // 3. Color Burn
+    case 3u: { return color_burn(cb, cs); }
+    // 4. Linear Burn
+    case 4u: { return cb + cs - 1.0; }
+    // 5. Lighten
+    case 5u: { return max(cb, cs); }
+    // 6. Screen
+    case 6u: { return cb + cs - cb * cs; }
+    // 7. Color Dodge
+    case 7u: { return color_dodge(cb, cs); }
+    // 8. Linear Dodge (Add)
+    case 8u: { return cb + cs; }
+    // 9. Overlay
+    case 9u: { return hard_light(cs, cb); }
+    // 10. Soft Light
+    case 10u: { return soft_light(cb, cs); }
+    // 11. Hard Light
+    case 11u: { return hard_light(cb, cs); }
+    // 12. Vivid Light
+    case 12u: { return vivid_light(cb, cs); }
+    // 13. Linear Light
+    case 13u: { return cb + 2.0 * cs - 1.0; }
+    // 14. Pin Light
+    case 14u: { return pin_light(cb, cs); }
+    // 15. Hard Mix
+    case 15u: {
+      return select(vec3f(0.0), vec3f(1.0), cb + 2.0 * cs - 1.0 >= vec3f(0.5));
+    }
+    // 16. Difference
+    case 16u: { return abs(cb - cs); }
+    // 17. Exclusion
+    case 17u: { return cb + cs - 2.0 * cb * cs; }
+    // 18. Subtract
+    case 18u: { return cb - cs; }
+    // 19. Divide
+    case 19u: { return divide(cb, cs); }
+    // 20. Hue
+    case 20u: { return set_lum(set_sat(cs, sat(cb)), lum(cb)); }
+    // 21. Saturation
+    case 21u: { return set_lum(set_sat(cb, sat(cs)), lum(cb)); }
+    // 22. Color
+    case 22u: { return set_lum(cs, lum(cb)); }
+    // 23. Luminosity
+    case 23u: { return set_lum(cb, lum(cs)); }
+    default: { return cs; }
+  }
+}
+
+// MARK: - Passes
+
+@vertex
+fn vs_fullscreen(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
+  // One oversized triangle rather than two: no vertex buffer, no diagonal seam.
+  var corners = array<vec2f, 3>(vec2f(-1.0, -3.0), vec2f(-1.0, 1.0), vec2f(3.0, 1.0));
+  return vec4f(corners[index], 0.0, 1.0);
+}
+
+/// Composites one layer over `dstTex` and writes the whole canvas back out.
+///
+/// Pixels outside the layer return the backdrop unchanged, which is why the render target can be
+/// cleared on every pass.
+@fragment
+fn fs_composite(@builtin(position) frag: vec4f) -> @location(0) vec4f {
+  let dst = textureLoad(dstTex, vec2i(i32(frag.x), i32(frag.y)), 0);
+
+  let opacity = params.a.z;
+  let mode = u32(params.a.w);
+  let origin = params.b.xy;
+  let size = params.b.zw;
+  let rotation = params.c.x;
+  let flip_x = params.c.y;
+  let flip_y = params.c.z;
+  let has_mask = params.c.w;
+  let nearest = params.d.x;
+
+  // Canvas space has y pointing down, with the document's top-left at the origin, so a pixel's
+  // centre is (x + 0.5, y + 0.5) and the layer's top-left corner maps to uv (0, 0).
+  let centre = origin + size * 0.5;
+  let delta = frag.xy - centre;
+  let cos_r = cos(rotation);
+  let sin_r = sin(rotation);
+  let unrotated = vec2f(delta.x * cos_r + delta.y * sin_r, -delta.x * sin_r + delta.y * cos_r);
+
+  var u = unrotated.x / max(size.x, 1e-6) * 2.0;
+  var v = unrotated.y / max(size.y, 1e-6) * 2.0;
+  if (flip_x > 0.5) { u = -u; }
+  if (flip_y > 0.5) { v = -v; }
+
+  var src = vec4f(0.0);
+  var mask = 1.0;
+  if (abs(u) <= 1.0 && abs(v) <= 1.0) {
+    let uv = vec2f(u * 0.5 + 0.5, v * 0.5 + 0.5);
+    if (nearest > 0.5) {
+      src = textureSampleLevel(srcTex, nearestSampler, uv, 0.0);
+      if (has_mask > 0.5) { mask = textureSampleLevel(maskTex, nearestSampler, uv, 0.0).r; }
+    } else {
+      src = textureSampleLevel(srcTex, linearSampler, uv, 0.0);
+      if (has_mask > 0.5) { mask = textureSampleLevel(maskTex, linearSampler, uv, 0.0).r; }
+    }
+  }
+
+  let source_alpha = src.a * opacity * mask;
+  if (source_alpha <= 0.0) { return dst; }
+
+  let backdrop_alpha = dst.a;
+  let cs = src.rgb;
+  let cb = select(vec3f(0.0), dst.rgb / max(backdrop_alpha, 1e-6), backdrop_alpha > 0.0);
+  let blended = blend(mode, cb, cs);
+
+  // W3C source-over-with-blend, which is what Photoshop composites in sRGB.
+  let out_alpha = source_alpha + backdrop_alpha * (1.0 - source_alpha);
+  let out_rgb = source_alpha * (1.0 - backdrop_alpha) * cs
+    + source_alpha * backdrop_alpha * blended
+    + (1.0 - source_alpha) * backdrop_alpha * cb;
+  return select(vec4f(0.0), vec4f(out_rgb, out_alpha), out_alpha > 0.0);
+}
+
+/// Draws the accumulation onto the screen: checkerboard first, then the document over it.
+@fragment
+fn fs_display(@builtin(position) frag: vec4f) -> @location(0) vec4f {
+  let zoom = displayParams.a.z;
+  let pan = displayParams.b.xy;
+  let canvas = displayParams.c.xy;
+
+  // The checkerboard is fixed in screen space, as Photoshop's is: zooming does not resize it.
+  let cell = floor(frag.xy / 8.0);
+  let odd = (i32(cell.x) + i32(cell.y)) & 1;
+  var color = vec3f(select(0.92, 0.82, odd == 1));
+
+  let document = (frag.xy - pan) / max(zoom, 1e-6);
+  if (document.x >= 0.0 && document.y >= 0.0 && document.x < canvas.x && document.y < canvas.y) {
+    let src = textureSampleLevel(accumTex, displaySampler, document / canvas, 0.0);
+    // The accumulation is premultiplied, so "over" is one multiply-add.
+    color = src.rgb + color * (1.0 - src.a);
+  }
+  return vec4f(color, 1.0);
+}

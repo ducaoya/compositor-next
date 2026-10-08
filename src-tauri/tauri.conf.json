@@ -1,0 +1,61 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Compositor",
+  "version": "0.1.0",
+  "identifier": "com.compositor.next",
+  "build": {
+    "beforeDevCommand": "pnpm --dir web dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm --dir web build",
+    "frontendDist": "../web/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Compositor",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true,
+        "dragDropEnabled": true
+      }
+    ],
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": []
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["comp"],
+        "name": "Compositor Project",
+        "description": "Compositor project"
+      },
+      {
+        "ext": ["psd"],
+        "name": "Photoshop Document",
+        "description": "Adobe Photoshop document"
+      },
+      {
+        "ext": ["png", "jpg", "jpeg", "tif", "tiff", "webp"],
+        "name": "Image",
+        "description": "Image file"
+      }
+    ]
+  }
+}

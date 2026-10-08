@@ -1,0 +1,17 @@
+{
+  "name": "compositor-next",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --dir web dev",
+    "build": "pnpm --dir web build",
+    "test": "pnpm --dir web test",
+    "tauri": "tauri",
+    "app": "tauri dev",
+    "check": "cargo test --workspace && pnpm --dir web test"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

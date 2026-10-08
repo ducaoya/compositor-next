@@ -1,0 +1,9 @@
+[package]
+name = "compositor-shaders"
+description = "Parse- and validate-checks for the canvas WGSL, so a shader typo fails the build rather than a GPU."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+naga = { version = "30.0.1", features = ["wgsl-in"] }

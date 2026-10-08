@@ -1,0 +1,625 @@
+{
+  "format": "com.compositor.project",
+  "version": 11,
+  "colorSpace": "sRGB",
+  "resolution": 72,
+  "documentID": "4F8278C8-9AD1-4DA0-AFEC-4FDFC61FE447",
+  "width": 960,
+  "height": 640,
+  "activeLayerID": "96DDACCF-581F-483C-ABF4-D46E00691E51",
+  "layers": [
+    {
+      "id": "64DD60FE-1A04-4FE6-AB3E-B1369DEC2E42",
+      "name": "Background",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          0,
+          0
+        ],
+        "size": [
+          960,
+          640
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 1,
+      "blendMode": "Normal",
+      "imageFile": "64DD60FE-1A04-4FE6-AB3E-B1369DEC2E42.png"
+    },
+    {
+      "id": "96DDACCF-581F-483C-ABF4-D46E00691E51",
+      "name": "Ring",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          0,
+          0
+        ],
+        "size": [
+          960,
+          640
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 0.9,
+      "blendMode": "Overlay",
+      "imageFile": "96DDACCF-581F-483C-ABF4-D46E00691E51.png"
+    },
+    {
+      "id": "A1FBB5E4-3596-4711-A1EE-405B5EA69686",
+      "name": "Clipped Glow",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          0,
+          0
+        ],
+        "size": [
+          960,
+          640
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 1,
+      "blendMode": "Screen",
+      "imageFile": "A1FBB5E4-3596-4711-A1EE-405B5EA69686.png",
+      "maskSourceID": "96DDACCF-581F-483C-ABF4-D46E00691E51"
+    },
+    {
+      "id": "30BAA249-67E0-4965-A159-4408031F0324",
+      "name": "Folder",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          0,
+          0
+        ],
+        "size": [
+          960,
+          640
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": true,
+      "opacity": 0.6,
+      "blendMode": "Normal"
+    },
+    {
+      "id": "8DEED4EF-AC89-4C10-A698-3F50D9DDA549",
+      "name": "Inside",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          0,
+          0
+        ],
+        "size": [
+          960,
+          640
+        ],
+        "rotation": -6,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 1,
+      "blendMode": "Soft Light",
+      "imageFile": "8DEED4EF-AC89-4C10-A698-3F50D9DDA549.png",
+      "parentID": "30BAA249-67E0-4965-A159-4408031F0324"
+    },
+    {
+      "id": "3C7EDEF9-64E8-4F39-A963-E1C8A16AD1DA",
+      "name": "Masked",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          0,
+          0
+        ],
+        "size": [
+          960,
+          640
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 0.75,
+      "blendMode": "Normal",
+      "imageFile": "3C7EDEF9-64E8-4F39-A963-E1C8A16AD1DA.png",
+      "maskFile": "3C7EDEF9-64E8-4F39-A963-E1C8A16AD1DA.mask.png",
+      "maskEnabled": true
+    },
+    {
+      "id": "4EB570CE-F866-4710-A80C-AEDC3BBE3150",
+      "name": "Blend Darken",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          0,
+          0
+        ],
+        "size": [
+          160,
+          40
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 1,
+      "blendMode": "Darken",
+      "imageFile": "4EB570CE-F866-4710-A80C-AEDC3BBE3150.png"
+    },
+    {
+      "id": "CC307988-3B60-4698-ADDF-854A4684A2AD",
+      "name": "Blend Multiply",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          160,
+          0
+        ],
+        "size": [
+          160,
+          40
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 1,
+      "blendMode": "Multiply",
+      "imageFile": "CC307988-3B60-4698-ADDF-854A4684A2AD.png"
+    },
+    {
+      "id": "0A882AE2-24E5-443B-AA77-F8A599F5B5F5",
+      "name": "Blend Color Burn",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          320,
+          0
+        ],
+        "size": [
+          160,
+          40
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 1,
+      "blendMode": "Color Burn",
+      "imageFile": "0A882AE2-24E5-443B-AA77-F8A599F5B5F5.png"
+    },
+    {
+      "id": "C90E6DDF-D9F6-4374-A033-6DE0A049B277",
+      "name": "Blend Linear Burn",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          480,
+          0
+        ],
+        "size": [
+          160,
+          40
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 1,
+      "blendMode": "Linear Burn",
+      "imageFile": "C90E6DDF-D9F6-4374-A033-6DE0A049B277.png"
+    },
+    {
+      "id": "2DA2C0E3-655D-4BF3-A19F-A854D49D3EE4",
+      "name": "Blend Lighten",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          640,
+          0
+        ],
+        "size": [
+          160,
+          40
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 1,
+      "blendMode": "Lighten",
+      "imageFile": "2DA2C0E3-655D-4BF3-A19F-A854D49D3EE4.png"
+    },
+    {
+      "id": "7CA2AC1F-4DE8-455E-A231-134707B4326B",
+      "name": "Blend Color Dodge",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          800,
+          0
+        ],
+        "size": [
+          160,
+          40
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 1,
+      "blendMode": "Color Dodge",
+      "imageFile": "7CA2AC1F-4DE8-455E-A231-134707B4326B.png"
+    },
+    {
+      "id": "7D43AB82-D129-40A9-A490-A886BFC48B80",
+      "name": "Blend Linear Dodge (Add)",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          0,
+          40
+        ],
+        "size": [
+          160,
+          40
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 1,
+      "blendMode": "Linear Dodge (Add)",
+      "imageFile": "7D43AB82-D129-40A9-A490-A886BFC48B80.png"
+    },
+    {
+      "id": "E29F1B7B-063D-40B7-AC3D-37B91BFD16DB",
+      "name": "Blend Hard Light",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          160,
+          40
+        ],
+        "size": [
+          160,
+          40
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 1,
+      "blendMode": "Hard Light",
+      "imageFile": "E29F1B7B-063D-40B7-AC3D-37B91BFD16DB.png"
+    },
+    {
+      "id": "FBC1AF43-4B35-42D7-A7C8-C0CF70104511",
+      "name": "Blend Vivid Light",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          320,
+          40
+        ],
+        "size": [
+          160,
+          40
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 1,
+      "blendMode": "Vivid Light",
+      "imageFile": "FBC1AF43-4B35-42D7-A7C8-C0CF70104511.png"
+    },
+    {
+      "id": "37BCE63B-F87C-4F68-A72E-E8FF56E06CE3",
+      "name": "Blend Linear Light",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          480,
+          40
+        ],
+        "size": [
+          160,
+          40
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 1,
+      "blendMode": "Linear Light",
+      "imageFile": "37BCE63B-F87C-4F68-A72E-E8FF56E06CE3.png"
+    },
+    {
+      "id": "06A1A3B0-8BF8-4387-A019-C291D3775916",
+      "name": "Blend Pin Light",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          640,
+          40
+        ],
+        "size": [
+          160,
+          40
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 1,
+      "blendMode": "Pin Light",
+      "imageFile": "06A1A3B0-8BF8-4387-A019-C291D3775916.png"
+    },
+    {
+      "id": "E358264E-5EDA-4F2F-A225-E6CFC83BA5C0",
+      "name": "Blend Hard Mix",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          800,
+          40
+        ],
+        "size": [
+          160,
+          40
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 1,
+      "blendMode": "Hard Mix",
+      "imageFile": "E358264E-5EDA-4F2F-A225-E6CFC83BA5C0.png"
+    },
+    {
+      "id": "95DF5685-7B06-4501-AED5-E398DFA22474",
+      "name": "Blend Difference",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          0,
+          80
+        ],
+        "size": [
+          160,
+          40
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 1,
+      "blendMode": "Difference",
+      "imageFile": "95DF5685-7B06-4501-AED5-E398DFA22474.png"
+    },
+    {
+      "id": "CB6B0F66-9C9D-4BC9-A912-399A7B298878",
+      "name": "Blend Exclusion",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          160,
+          80
+        ],
+        "size": [
+          160,
+          40
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 1,
+      "blendMode": "Exclusion",
+      "imageFile": "CB6B0F66-9C9D-4BC9-A912-399A7B298878.png"
+    },
+    {
+      "id": "468C010C-B698-4C8F-A798-DF06939F5E8E",
+      "name": "Blend Subtract",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          320,
+          80
+        ],
+        "size": [
+          160,
+          40
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 1,
+      "blendMode": "Subtract",
+      "imageFile": "468C010C-B698-4C8F-A798-DF06939F5E8E.png"
+    },
+    {
+      "id": "69E43D17-268D-4DE5-A871-273035CA565D",
+      "name": "Blend Divide",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          480,
+          80
+        ],
+        "size": [
+          160,
+          40
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 1,
+      "blendMode": "Divide",
+      "imageFile": "69E43D17-268D-4DE5-A871-273035CA565D.png"
+    },
+    {
+      "id": "8BEA818B-7F36-470D-A0D8-F9F3FF81084D",
+      "name": "Blend Hue",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          640,
+          80
+        ],
+        "size": [
+          160,
+          40
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 1,
+      "blendMode": "Hue",
+      "imageFile": "8BEA818B-7F36-470D-A0D8-F9F3FF81084D.png"
+    },
+    {
+      "id": "A60445D7-01E2-47DC-AB2C-0902B8A5CECD",
+      "name": "Blend Saturation",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          800,
+          80
+        ],
+        "size": [
+          160,
+          40
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 1,
+      "blendMode": "Saturation",
+      "imageFile": "A60445D7-01E2-47DC-AB2C-0902B8A5CECD.png"
+    },
+    {
+      "id": "1C91C9D7-A643-435C-A07C-9891BC0C67B4",
+      "name": "Blend Color",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          0,
+          120
+        ],
+        "size": [
+          160,
+          40
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 1,
+      "blendMode": "Color",
+      "imageFile": "1C91C9D7-A643-435C-A07C-9891BC0C67B4.png"
+    },
+    {
+      "id": "D708E21B-C4FC-4047-A7B1-57F8012561E1",
+      "name": "Blend Luminosity",
+      "isVisible": true,
+      "transform": {
+        "origin": [
+          160,
+          120
+        ],
+        "size": [
+          160,
+          40
+        ],
+        "rotation": 0,
+        "flipX": false,
+        "flipY": false,
+        "sampling": "High quality"
+      },
+      "isGroup": false,
+      "opacity": 1,
+      "blendMode": "Luminosity",
+      "imageFile": "D708E21B-C4FC-4047-A7B1-57F8012561E1.png"
+    }
+  ],
+  "guides": [
+    {
+      "id": "400C944E-D268-449F-A5E1-2F694580CD47",
+      "axis": "vertical",
+      "position": 480
+    },
+    {
+      "id": "2E250AD7-5E0D-4FE8-A7BB-CC2B394742D8",
+      "axis": "horizontal",
+      "position": 213.33333333333334
+    }
+  ]
+}

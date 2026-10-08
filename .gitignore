@@ -1,0 +1,21 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+target
+web/dist
+
+# Cargo.lock is deliberately committed: this is an application, not a library.
+
+# Editor and OS
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+Thumbs.db
+*.log
+*.local
+
+# Tauri's generated schema
+src-tauri/gen/schemas
