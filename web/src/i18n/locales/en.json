@@ -162,6 +162,7 @@
     "inverseOf": "Inverse of {shape}",
     "rectangle": "Rectangle",
     "ellipse": "Ellipse",
+    "lasso": "Lasso",
     "webgpu": "WebGPU",
     "noWebgpu": "No WebGPU",
     "budget": "{megapixels} MP budget",

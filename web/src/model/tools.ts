@@ -80,7 +80,7 @@ export const TOOLS: ToolDefinition[] = [
     id: 'lasso',
     labelKey: 'tools.lasso',
     shortcut: 'L',
-    implemented: false,
+    implemented: true,
     icon: `
       <path d="M12 4.5c4.9 0 8.8 2.2 8.8 5s-3.9 5-8.8 5c-1.9 0-3.7-.4-5.1-1.1" />
       <path d="M6.9 13.4C4.8 12.5 3.2 11.1 3.2 9.5c0-2.8 3.9-5 8.8-5" />

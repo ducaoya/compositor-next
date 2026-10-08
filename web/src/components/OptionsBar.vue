@@ -32,7 +32,9 @@ const tipStyle = computed(() => {
 })
 
 const isBrush = computed(() => tool.value === 'brush' || tool.value === 'eraser')
-const isMarquee = computed(() => tool.value === 'marqueeRect' || tool.value === 'marqueeEllipse')
+const isMarquee = computed(
+  () => tool.value === 'marqueeRect' || tool.value === 'marqueeEllipse' || tool.value === 'lasso',
+)
 const isZoomLike = computed(() => tool.value === 'zoom' || tool.value === 'hand')
 </script>
 

@@ -6,17 +6,58 @@
  * mask; when feathering and the lasso arrive, this type grows into one.
  */
 
-export type SelectionKind = 'rectangle' | 'ellipse'
+export type SelectionKind = 'rectangle' | 'ellipse' | 'polygon'
 
 export interface Selection {
   kind: SelectionKind
-  /** Document-space bounds. */
+  /** Document-space bounds, which for a polygon are its bounding box. */
   x: number
   y: number
   width: number
   height: number
   /** True when everything *outside* the shape is selected. */
   inverted: boolean
+  /** The outline, for a polygon only. */
+  points?: [number, number][]
+}
+
+/**
+ * A freehand selection, from the points a lasso drag visited.
+ *
+ * Points closer together than `minimumStep` are dropped, because a pointer reports hundreds of
+ * positions a second and a path with all of them is slower to hit-test and no more accurate. The
+ * last point is joined back to the first, which is what makes a lasso a loop rather than a line.
+ */
+export function polygonSelection(points: readonly [number, number][], minimumStep = 2): Selection | null {
+  const kept: [number, number][] = []
+  for (const point of points) {
+    const last = kept[kept.length - 1]
+    if (!last || Math.hypot(point[0] - last[0], point[1] - last[1]) >= minimumStep) {
+      kept.push([point[0], point[1]])
+    }
+  }
+  if (kept.length < 3) return null
+
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const [x, y] of kept) {
+    minX = Math.min(minX, x)
+    minY = Math.min(minY, y)
+    maxX = Math.max(maxX, x)
+    maxY = Math.max(maxY, y)
+  }
+  if (maxX - minX < 1 || maxY - minY < 1) return null
+  return {
+    kind: 'polygon',
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+    inverted: false,
+    points: kept,
+  }
 }
 
 export function rectSelection(
@@ -69,6 +110,7 @@ function shapeContains(selection: Selection, x: number, y: number): boolean {
     return false
   }
   if (selection.kind === 'rectangle') return true
+  if (selection.kind === 'polygon') return polygonContains(selection.points ?? [], x, y)
   const rx = selection.width / 2
   const ry = selection.height / 2
   const dx = (x - (selection.x + rx)) / Math.max(rx, 1e-6)
@@ -76,9 +118,31 @@ function shapeContains(selection: Selection, x: number, y: number): boolean {
   return dx * dx + dy * dy <= 1
 }
 
+/** The even-odd ray test: a point is inside when a ray from it crosses the outline an odd number
+ *  of times. A concave lasso needs this; a bounding-box test would select the notches too. */
+function polygonContains(points: readonly [number, number][], x: number, y: number): boolean {
+  let inside = false
+  for (let i = 0, j = points.length - 1; i < points.length; j = i, i += 1) {
+    const [xi, yi] = points[i]
+    const [xj, yj] = points[j]
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) {
+      inside = !inside
+    }
+  }
+  return inside
+}
+
 /** Draws the shape into the current path, without beginning or clipping it. */
 function addShape(path: CanvasPath, selection: Selection): void {
-  if (selection.kind === 'rectangle') {
+  if (selection.kind === 'polygon') {
+    const points = selection.points ?? []
+    if (points.length === 0) return
+    path.moveTo(points[0][0], points[0][1])
+    for (let index = 1; index < points.length; index += 1) {
+      path.lineTo(points[index][0], points[index][1])
+    }
+    path.closePath()
+  } else if (selection.kind === 'rectangle') {
     path.rect(selection.x, selection.y, selection.width, selection.height)
   } else {
     path.ellipse(
@@ -114,6 +178,8 @@ export function selectionPath(
   return 'evenodd'
 }
 
+/** The path an inverted selection needs: the canvas, then the shape, wound the other way. */
+
 /**
  * Clips a drawing context to the selection.
  *
@@ -137,7 +203,13 @@ export function selectionOutline(selection: Selection | null, canvasWidth: numbe
   if (!selection) return ''
   const shapes: string[] = []
   if (selection.inverted) shapes.push(`M0 0H${canvasWidth}V${canvasHeight}H0Z`)
-  if (selection.kind === 'rectangle') {
+  if (selection.kind === 'polygon') {
+    const points = selection.points ?? []
+    if (points.length > 2) {
+      const [first, ...rest] = points
+      shapes.push(`M${first[0]} ${first[1]}` + rest.map(([x, y]) => `L${x} ${y}`).join('') + 'Z')
+    }
+  } else if (selection.kind === 'rectangle') {
     const { x, y, width, height } = selection
     shapes.push(`M${x} ${y}H${x + width}V${y + height}H${x}Z`)
   } else {

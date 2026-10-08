@@ -13,8 +13,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import { containsPoint } from '../model/document'
-import { selectionOutline } from '../model/selection'
-import { isFolder, visibleLeaves } from '../model/types'
+import { polygonSelection, selectionOutline } from '../model/selection'
+import { isFolder, visibleLeaves, type Transform } from '../model/types'
 import {
   attachCanvas,
   beginEdit,
@@ -64,8 +64,17 @@ type Drag =
   | { kind: 'none' }
   | { kind: 'pan'; lastX: number; lastY: number }
   | { kind: 'marquee'; start: [number, number]; current: [number, number]; elliptical: boolean }
+  | { kind: 'lasso'; points: [number, number][] }
   | { kind: 'paint' }
   | { kind: 'move'; layerId: string; startOrigin: [number, number]; startPointer: [number, number] }
+  | {
+      kind: 'transform'
+      layerId: string
+      handle: string
+      start: Transform
+      anchor: [number, number]
+      startAngle: number
+    }
   | { kind: 'zoom'; out: boolean }
 
 let drag: Drag = { kind: 'none' }
@@ -140,6 +149,77 @@ const guideLines = computed(() => {
   ]
   return [...stored, ...live]
 })
+
+/**
+ * The eight scale handles, in document coordinates.
+ *
+ * They are the layer's own rectangle put through its matrix, so a rotated layer gets handles on its
+ * rotated corners — which is what makes a transform feel attached to the layer rather than to the
+ * document.
+ */
+const HANDLE_ORDER = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w', 'rotate'] as const
+
+const transformHandles = computed(() => {
+  const layer = manifest.value?.layers.find((record) => record.id === activeLayerId.value)
+  if (!layer || tool.value !== 'move') return []
+  const { width, height } = layerPixelSize(layer)
+  const matrix = layerMatrix(layer)
+  const places: Record<string, [number, number]> = {
+    nw: [0, 0],
+    n: [0.5, 0],
+    ne: [1, 0],
+    e: [1, 0.5],
+    se: [1, 1],
+    s: [0.5, 1],
+    sw: [0, 1],
+    w: [0, 0.5],
+  }
+  const points = HANDLE_ORDER.map((id) => {
+    if (id === 'rotate') {
+      // The rotate handle floats above the top edge, where Photoshop's does.
+      const above = matrix.transformPoint(new DOMPoint(width / 2, -24 / Math.max(view.zoom, 1e-6)))
+      return { id, x: above.x, y: above.y }
+    }
+    const [u, v] = places[id]
+    const point = matrix.transformPoint(new DOMPoint(u * width, v * height))
+    return { id, x: point.x, y: point.y }
+  })
+  return points
+})
+
+/** The handle under a document point, within a screen-space tolerance. */
+function handleAt(x: number, y: number): string | null {
+  const tolerance = 7 / Math.max(view.zoom, 1e-6)
+  for (const handle of transformHandles.value) {
+    if (Math.hypot(handle.x - x, handle.y - y) <= tolerance) return handle.id
+  }
+  return null
+}
+
+/** The corner a scale drag pulls against: the one that stays put. */
+function oppositeCorner(handle: string, transform: Transform): [number, number] {
+  const [ox, oy] = transform.origin
+  const [w, h] = transform.size
+  const radians = (transform.rotation * Math.PI) / 180
+  const cos = Math.cos(radians)
+  const sin = Math.sin(radians)
+  const cx = ox + w / 2
+  const cy = oy + h / 2
+  const unit: Record<string, [number, number]> = {
+    nw: [1, 1],
+    ne: [0, 1],
+    se: [0, 0],
+    sw: [1, 0],
+    n: [0.5, 1],
+    s: [0.5, 0],
+    e: [0, 0.5],
+    w: [1, 0.5],
+  }
+  const [u, v] = unit[handle] ?? [0.5, 0.5]
+  const lx = (u - 0.5) * w
+  const ly = (v - 0.5) * h
+  return [cx + lx * cos - ly * sin, cy + lx * sin + ly * cos]
+}
 
 /** The active layer's box, for the Move tool's transform frame. */
 const transformBox = computed(() => {
@@ -220,6 +300,12 @@ function onPointerDown(event: PointerEvent): void {
       }
       return
     }
+    case 'lasso': {
+      // A lasso is a marquee whose shape is the path the pointer took.
+      drag = { kind: 'lasso', points: [[dx, dy]] }
+      setSelection(null)
+      return
+    }
     case 'brush':
     case 'eraser':
       drag = { kind: 'paint' }
@@ -230,6 +316,29 @@ function onPointerDown(event: PointerEvent): void {
       pickColor(dx, dy)
       return
     case 'move': {
+      // A press on a handle transforms; a press anywhere else moves. That is one tool doing the two
+      // things Photoshop's Move tool does.
+      const handle = handleAt(dx, dy)
+      const active = manifest.value?.layers.find((record) => record.id === activeLayerId.value)
+      if (handle && active && !isFolder(active) && active.imageFile !== undefined) {
+        const [ax, ay] = oppositeCorner(handle, active.transform)
+        const centreX = active.transform.origin[0] + active.transform.size[0] / 2
+        const centreY = active.transform.origin[1] + active.transform.size[1] / 2
+        beginEdit('Transform Layer')
+        drag = {
+          kind: 'transform',
+          layerId: active.id,
+          handle,
+          start: {
+            ...active.transform,
+            origin: [...active.transform.origin] as [number, number],
+            size: [...active.transform.size] as [number, number],
+          },
+          anchor: [ax, ay],
+          startAngle: Math.atan2(dy - centreY, dx - centreX),
+        }
+        return
+      }
       const hit = topmostLayerAt(dx, dy)
       if (hit) selectLayer(hit, event.shiftKey)
       const layer = manifest.value?.layers.find((record) => record.id === (hit ?? activeLayerId.value))
@@ -273,6 +382,10 @@ function onPointerMove(event: PointerEvent): void {
       dragging.current = [dx, dy]
       setSelection(marqueeSelection(dragging.start, dragging.current, dragging.elliptical))
       return
+    case 'lasso':
+      dragging.points.push([dx, dy])
+      setSelection(polygonSelection(dragging.points))
+      return
     case 'paint':
       extendStroke(dx, dy)
       schedule()
@@ -300,9 +413,75 @@ function onPointerMove(event: PointerEvent): void {
       dragGuides.value = { x: snapped.guidesX, y: snapped.guidesY }
       return
     }
+    case 'transform': {
+      const current = manifest.value
+      const record = current?.layers.find((item) => item.id === dragging.layerId)
+      if (!current || !record) return
+      applyTransformDrag(record, dragging, dx, dy, event.shiftKey)
+      return
+    }
     case 'zoom':
       return
   }
+}
+
+/**
+ * One step of a handle drag.
+ *
+ * Scaling keeps the opposite corner where it is, which is why the anchor is captured when the drag
+ * starts: recomputing it each frame from the moving rectangle would let the layer creep across the
+ * canvas. Rotation is measured from the layer's centre, and Shift snaps it to 15 degrees.
+ */
+function applyTransformDrag(
+  layer: { transform: Transform },
+  dragging: Extract<Drag, { kind: 'transform' }>,
+  dx: number,
+  dy: number,
+  shift: boolean,
+): void {
+  const start = dragging.start
+  const radians = (start.rotation * Math.PI) / 180
+  const cos = Math.cos(radians)
+  const sin = Math.sin(radians)
+  const [ax, ay] = dragging.anchor
+
+  if (dragging.handle === 'rotate') {
+    const centreX = start.origin[0] + start.size[0] / 2
+    const centreY = start.origin[1] + start.size[1] / 2
+    const turned = Math.atan2(dy - centreY, dx - centreX) - dragging.startAngle
+    let degrees = start.rotation + (turned * 180) / Math.PI
+    if (shift) degrees = Math.round(degrees / 15) * 15
+    layer.transform.rotation = Math.round(degrees * 100) / 100
+    return
+  }
+
+  // The pointer, in the layer's own unrotated frame, relative to the fixed corner.
+  const localX = (dx - ax) * cos + (dy - ay) * sin
+  const localY = -(dx - ax) * sin + (dy - ay) * cos
+  let width = Math.abs(localX)
+  let height = Math.abs(localY)
+  // An edge handle moves one side only.
+  if (dragging.handle === 'n' || dragging.handle === 's') width = start.size[0]
+  if (dragging.handle === 'e' || dragging.handle === 'w') height = start.size[1]
+  if (shift && width > 0 && height > 0) {
+    // Snap to the layer's starting aspect ratio, whichever side the pointer moved further along.
+    const ratio = start.size[0] / Math.max(start.size[1], 1e-6)
+    if (width / height > ratio) height = width / ratio
+    else width = height * ratio
+  }
+  width = Math.max(1, width)
+  height = Math.max(1, height)
+
+  // Put the fixed corner back where it was, then derive the origin from the new centre.
+  const centreLocalX = (localX < 0 ? -width : width) / 2
+  const centreLocalY = (localY < 0 ? -height : height) / 2
+  const centreX = ax + centreLocalX * cos - centreLocalY * sin
+  const centreY = ay + centreLocalX * sin + centreLocalY * cos
+
+  layer.transform.size[0] = width
+  layer.transform.size[1] = height
+  layer.transform.origin[0] = centreX - width / 2
+  layer.transform.origin[1] = centreY - height / 2
 }
 
 function onPointerUp(event: PointerEvent): void {
@@ -319,9 +498,15 @@ function onPointerUp(event: PointerEvent): void {
     case 'marquee':
       if (!marqueeSelection(drag.start, drag.current, drag.elliptical)) setSelection(null)
       break
+    case 'lasso':
+      setSelection(polygonSelection(drag.points))
+      break
     case 'move':
       dragGuides.value = { x: [], y: [] }
       // One undo step for the whole drag, and none at all if it ended where it started.
+      endEdit()
+      break
+    case 'transform':
       endEdit()
       break
     default:
@@ -369,7 +554,7 @@ function onKeyDown(event: KeyboardEvent): void {
     spaceHeld = true
     event.preventDefault()
   }
-  if (event.key === 'Escape' && drag.kind === 'marquee') {
+  if (event.key === 'Escape' && (drag.kind === 'marquee' || drag.kind === 'lasso')) {
     setSelection(null)
     drag = { kind: 'none' }
   }
@@ -452,6 +637,15 @@ watch(
         <path v-if="selection" class="ants__over" :transform="`translate(${view.panX} ${view.panY}) scale(${view.zoom})`" :d="selectionOutline(selection, manifest?.width ?? 0, manifest?.height ?? 0)" />
       </g>
       <polygon v-if="transformBox" class="frame" :points="transformBox" />
+      <circle
+        v-for="handle in transformHandles"
+        :key="handle.id"
+        class="handle"
+        :class="{ 'handle--rotate': handle.id === 'rotate' }"
+        :cx="handle.x * view.zoom + view.panX"
+        :cy="handle.y * view.zoom + view.panY"
+        :r="handle.id === 'rotate' ? 4 : 3.5"
+      />
       <line
         v-for="line in guideLines"
         :key="line.id"
@@ -538,6 +732,17 @@ watch(
   to {
     stroke-dashoffset: -8;
   }
+}
+
+.handle {
+  fill: #ffffff;
+  stroke: #1a1a1a;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.handle--rotate {
+  fill: #cfe4fb;
 }
 
 .frame {

@@ -28,7 +28,13 @@ const summary = computed(() => {
 const selectionText = computed(() => {
   const current = selection.value
   if (!current) return t('status.noSelection')
-  const shape = t(current.kind === 'ellipse' ? 'status.ellipse' : 'status.rectangle')
+  const shape = t(
+    current.kind === 'ellipse'
+      ? 'status.ellipse'
+      : current.kind === 'polygon'
+        ? 'status.lasso'
+        : 'status.rectangle',
+  )
   const described = t('status.selection', {
     kind: shape,
     width: Math.round(current.width),

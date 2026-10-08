@@ -162,6 +162,7 @@
     "inverseOf": "{shape}的反选",
     "rectangle": "矩形",
     "ellipse": "椭圆",
+    "lasso": "套索",
     "webgpu": "WebGPU",
     "noWebgpu": "无 WebGPU",
     "budget": "{megapixels} MP 预算",

@@ -23,10 +23,14 @@ compositing core, painting, and the shell around them.
   per pixel.
 - **Painting** — brush and eraser with size, hardness, opacity and flow, stroke smoothing, and a
   live tip outline. Strokes upload only the rectangle they touched.
-- **Selections** — rectangle and ellipse marquee with marching ants, Select All, Deselect, and
-  Inverse. Painting and filling are clipped to the selection.
+- **Selections** — rectangle, ellipse and freehand lasso, with marching ants, Select All, Deselect
+  and Inverse. Painting and filling are clipped to the selection, and a lasso's notch is a notch: a
+  point inside the bounding box but outside the path is not selected.
 - **The Move tool** — drag a layer, Shift to lock an axis, and snapping to the canvas, its centre
-  and the other layers' edges and centres, with the snapped lines drawn as guides.
+  and the other layers' edges and centres, with the snapped lines drawn as guides. Its eight
+  handles scale — holding Shift keeps the starting aspect ratio — and the handle above the top edge
+  rotates, with Shift snapping to 15°. Scaling holds the opposite corner, rotation holds the
+  centre.
 - **The layer stack** — selection, reordering by drag, grouping, visibility, nesting, renaming,
   inherited folder opacity.
 - **Properties** — blend mode, opacity, transform, sampling, flips, clipping masks, mask enable.
@@ -43,9 +47,9 @@ compositing core, painting, and the shell around them.
   faithfully** — the file keeps every setting — but the compositor does not render them yet.
 - Painting on a layer mask. Masks are read, written, composited and honoured by adjustment layers,
   but there is no way to paint one yet.
-- Transform handles. A layer can be moved, and its position, size and angle typed, but there are no
-  drag handles for scale and rotate.
-- Lasso, magic wand, and Feather/Expand/Contract on a selection.
+- The magic wand, and Feather, Expand and Contract on a selection. A selection is a shape here,
+  not an 8-bit mask, which is what those three need.
+- Free Transform: rotate and scale are per layer and axis-aligned; there is no distort or skew.
 - The per-range bands in Hue/Saturation: the master hue, saturation and lightness apply, the six
   colour-range bands do not.
 - Selecting a subject, camera RAW, PSD import. The macOS app uses Vision for the first; this will
