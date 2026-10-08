@@ -120,6 +120,16 @@ const selection = ref<Selection | null>(null)
  * app, and turning a mask into an image there would be the whole cost of painting.
  */
 const selectionMaskCanvas = shallowRef<OffscreenCanvas | null>(null)
+/**
+/**
+ * Whether the brush is painting the active layer's mask rather than its pixels.
+ *
+ * Photoshop tracks this per layer and changes it when the mask thumbnail is clicked; one flag is
+ * enough here because only the active layer can be painted.
+ */
+const maskEditingRef = ref(false)
+/** Surfaces whose pixels have been painted, so a save re-encodes those and nothing else. */
+const modifiedSurfaces = new Set<string>()
 /** What the user is being asked for: a feather radius, or how far to grow or shrink. */
 export const selectionAmountPrompt = reactive({
   open: false,
@@ -234,6 +244,7 @@ export function useSession() {
     selectionMaskCanvas,
     wandTolerance,
     wandContiguous,
+    maskEditing: maskEditingRef,
   }
 }
 
@@ -449,10 +460,9 @@ async function decodeAssets(opened: OpenedProject, target: Compositor): Promise<
       textures.set(key, markRaw(texture))
       if (asset.kind === 'image') {
         layerImages.set(asset.layerId, { width: bitmap.width, height: bitmap.height })
-        // The paint surface is seeded from the same pixels the GPU got. Keeping the raster on the
-        // CPU as well is what makes the brush, the eyedropper and saving possible; it is also the
-        // one place this build holds a document's pixels twice.
-        paintStore.create(asset.layerId, bitmap, bitmap.width, bitmap.height)
+        paintStore.create(asset.layerId, bitmap, bitmap.width, bitmap.height, 'image')
+      } else {
+        paintStore.create(asset.layerId, bitmap, bitmap.width, bitmap.height, 'mask')
       }
       bitmap.close()
     } catch (error) {
@@ -467,6 +477,8 @@ async function adopt(opened: OpenedProject): Promise<void> {
   manifest.value = opened.manifest
   textures.clear()
   paintStore.clear()
+  modifiedSurfaces.clear()
+  maskEditingRef.value = false
   layerImages.clear()
   selection.value = null
   pendingBytes = new Map()
@@ -512,6 +524,13 @@ export async function saveProject(): Promise<void> {
     if (!client.writable) {
       message.value = t('message.browserPreview')
       return
+    }
+    // Anything the brush touched is re-encoded here; everything else is linked from the file it
+    // already has, which is what keeps saving a large document cheap.
+    for (const surfaceId of modifiedSurfaces) {
+      const [layerId, surfaceKind] = surfaceId.split('|')
+      const bytes = await paintStore.encode(layerId, surfaceKind === 'mask' ? 'mask' : 'image')
+      if (bytes) pendingBytes.set(surfaceId, bytes)
     }
     project.value = await client.saveProject(opened, current, pendingBytes)
     pendingBytes = new Map()
@@ -875,15 +894,29 @@ export function paintableLayer(): LayerRecord | null {
   return layer
 }
 
+/** Which of a layer's two surfaces the tools are working on. */
+export function paintTarget(): import('../render/paint').SurfaceKind {
+  const layer = activeLayer.value
+  return maskEditing.value && layer?.maskFile ? 'mask' : 'image'
+}
+
+export function setMaskEditing(on: boolean): void {
+  maskEditing.value = on
+}
+
+const maskEditing = maskEditingRef
+export const maskEditingState = maskEditingRef
+
 /** The surface for a layer, made from its pixels if it does not have one yet. */
-export function ensureSurface(layer: LayerRecord): LayerSurface {
+export function ensureSurface(layer: LayerRecord, kind: import('../render/paint').SurfaceKind): LayerSurface {
   const { width, height } = layerPixelSize(layer)
-  return paintStore.ensure(layer.id, width, height)
+  return paintStore.ensure(layer.id, width, height, kind)
 }
 
 // MARK: - Painting
 
 let strokeLayer: string | null = null
+let strokeKind: import('../render/paint').SurfaceKind = 'image'
 let strokeLast: [number, number] | null = null
 let strokeSmoothed: [number, number] | null = null
 
@@ -895,17 +928,20 @@ function brushErasing(): boolean {
 export function beginStroke(x: number, y: number): void {
   const layer = paintableLayer()
   if (!layer) return
-  const surface = ensureSurface(layer)
+  const kind = paintTarget()
+  const surface = ensureSurface(layer, kind)
   const clip = currentSelectionClip(layer)
   const [lx, ly] = documentToLayer(layer, x, y)
   const radius = (brush.size / 2) / layerPixelScale(layer)
 
-  history.begin('Brush', manifest.value!)
+  history.begin(kind === 'mask' ? 'Paint Mask' : 'Brush', manifest.value!)
   // A layer that had no pixels now has some, which is what makes it save.
-  if (!layer.imageFile) layer.imageFile = doc.imageFileName(layer.id)
-  layerImages.set(layer.id, { width: surface.width, height: surface.height })
+  if (kind === 'image' && !layer.imageFile) layer.imageFile = doc.imageFileName(layer.id)
+  if (kind === 'image') layerImages.set(layer.id, { width: surface.width, height: surface.height })
+  modifiedSurfaces.add(assetKey(layer.id, kind))
 
   strokeLayer = layer.id
+  strokeKind = kind
   strokeLast = [lx, ly]
   strokeSmoothed = [lx, ly]
   surface.dirty = unionDirty(
@@ -917,7 +953,7 @@ export function beginStroke(x: number, y: number): void {
 export function extendStroke(x: number, y: number): void {
   if (!strokeLayer || !strokeLast) return
   const layer = manifest.value?.layers.find((record) => record.id === strokeLayer)
-  const surface = paintStore.surface(strokeLayer)
+  const surface = paintStore.surface(strokeLayer, strokeKind)
   if (!layer || !surface) return
 
   const [lx, ly] = documentToLayer(layer, x, y)
@@ -966,15 +1002,17 @@ function unionDirty(
 export function fillLayer(color: { r: number; g: number; b: number } | null): void {
   const layer = paintableLayer()
   if (!layer) return
-  const surface = ensureSurface(layer)
-  edit(color ? 'Fill' : 'Clear', (current) => {
+  const kind = paintTarget()
+  const surface = ensureSurface(layer, kind)
+  edit(kind === 'mask' ? 'Fill Mask' : color ? 'Fill' : 'Clear', (current) => {
     const record = current.layers.find((item) => item.id === layer.id)
     if (!record) return false
-    if (!record.imageFile) record.imageFile = doc.imageFileName(record.id)
-    layerImages.set(record.id, { width: surface.width, height: surface.height })
+    if (kind === 'image' && !record.imageFile) record.imageFile = doc.imageFileName(record.id)
+    if (kind === 'image') layerImages.set(record.id, { width: surface.width, height: surface.height })
     fillSurface(surface, color, currentSelectionClip(record))
     return true
   })
+  modifiedSurfaces.add(assetKey(layer.id, kind))
   schedulePaintFlush()
 }
 
@@ -999,6 +1037,57 @@ export function pickColor(x: number, y: number): boolean {
     return true
   }
   return false
+}
+
+/**
+ * Adds a layer mask, white, which is Photoshop's "Reveal All".
+ *
+ * The mask is document-sized when the layer is, and matches the layer's own pixels otherwise, so
+ * the same transform places both.
+ */
+export function addLayerMask(): void {
+  const layer = paintableLayer()
+  if (!layer || layer.maskFile) return
+  const size = layerPixelSize(layer)
+  edit('Add Layer Mask', (current) => {
+    const record = current.layers.find((item) => item.id === layer.id)
+    if (!record) return false
+    record.maskFile = doc.maskFileName(record.id)
+    record.maskEnabled = true
+    return true
+  })
+  maskEditing.value = true
+  const surface = paintStore.ensure(layer.id, size.width, size.height, 'mask')
+  surface.dirty = { x: 0, y: 0, width: surface.width, height: surface.height }
+  modifiedSurfaces.add(assetKey(layer.id, 'mask'))
+  schedulePaintFlush()
+}
+
+export function removeLayerMask(): void {
+  const layer = paintableLayer()
+  if (!layer?.maskFile) return
+  edit('Delete Layer Mask', (current) => {
+    const record = current.layers.find((item) => item.id === layer.id)
+    if (!record) return false
+    delete record.maskFile
+    delete record.maskEnabled
+    return true
+  })
+  paintStore.dispose(layer.id, 'mask')
+  textures.delete(assetKey(layer.id, 'mask'))
+  modifiedSurfaces.delete(assetKey(layer.id, 'mask'))
+  maskEditing.value = false
+}
+
+export function toggleMaskEnabled(): void {
+  const layer = paintableLayer()
+  if (!layer?.maskFile) return
+  edit('Mask', (current) => {
+    const record = current.layers.find((item) => item.id === layer.id)
+    if (!record) return false
+    record.maskEnabled = record.maskEnabled === false
+    return true
+  })
 }
 
 // MARK: - Selections
@@ -1234,13 +1323,14 @@ let flushScheduled = false
 export function flushPaint(): void {
   const target = compositor.value
   if (!target) return
-  for (const [layerId, surface] of paintStore.dirtySurfaces()) {
+  for (const [surfaceId, surface] of paintStore.dirtySurfaces()) {
     const rect = surface.dirty
     if (!rect) continue
-    const key = assetKey(layerId, 'image')
+    const [layerId, surfaceKind] = surfaceId.split('|')
+    const key = assetKey(layerId, surfaceKind === 'mask' ? 'mask' : 'image')
     const texture = target.setLayerTexture(key, surface.canvas, surface.width, surface.height, rect)
     if (texture) textures.set(key, markRaw(texture))
-    layerImages.set(layerId, { width: surface.width, height: surface.height })
+    if (surfaceKind !== 'mask') layerImages.set(layerId, { width: surface.width, height: surface.height })
     paintStore.markClean(surface)
   }
 }
@@ -1487,6 +1577,10 @@ if (typeof window !== 'undefined') {
         return paintStore
       },
       selectTool,
+      setForeground,
+      addLayerMask,
+      removeLayerMask,
+      setMaskEditing,
       featherSelection,
       expandSelection,
       contractSelection,

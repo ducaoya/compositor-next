@@ -131,7 +131,10 @@
     "group": "图层编组 (Ctrl+G)",
     "ungroup": "取消编组 (Ctrl+Shift+G)",
     "delete": "删除图层",
-    "count": "{count} 个图层"
+    "count": "{count} 个图层",
+    "addMask": "添加图层蒙版",
+    "removeMask": "删除图层蒙版",
+    "maskTarget": "正在绘制蒙版"
   },
   "properties": {
     "title": "属性",

@@ -12,6 +12,7 @@
  */
 
 import { clipToSelection, type Selection } from '../model/selection'
+import { encodeGrayscalePng, grayscaleFromRgba } from './png'
 
 export interface BrushSettings {
   /** Diameter in document pixels, 1–500. */
@@ -66,45 +67,64 @@ export function clampRect(rect: DirtyRect, width: number, height: number): Dirty
   return { x, y, width: right - x, height: bottom - y }
 }
 
+/** What a surface holds: a layer's pixels, or its mask. */
+export type SurfaceKind = 'image' | 'mask'
+
+const surfaceKey = (layerId: string, kind: SurfaceKind) => `${layerId}|${kind}`
+
 export class PaintStore {
   private surfaces = new Map<string, LayerSurface>()
 
-  surface(layerId: string): LayerSurface | undefined {
-    return this.surfaces.get(layerId)
+  surface(layerId: string, kind: SurfaceKind = 'image'): LayerSurface | undefined {
+    return this.surfaces.get(surfaceKey(layerId, kind))
   }
 
-  has(layerId: string): boolean {
-    return this.surfaces.has(layerId)
+  has(layerId: string, kind: SurfaceKind = 'image'): boolean {
+    return this.surfaces.has(surfaceKey(layerId, kind))
   }
 
-  /** Makes a surface for a layer, seeded from its pixels when it has any. */
-  create(layerId: string, source: ImageBitmap | null, width: number, height: number): LayerSurface {
-    const existing = this.surfaces.get(layerId)
+  /**
+   * Makes a surface, seeded from its pixels when it has any.
+   *
+   * A mask surface is seeded from a gray bitmap and filled white when there is none, which is
+   * Photoshop's "Reveal All" default: the mask starts by hiding nothing.
+   */
+  create(
+    layerId: string,
+    source: ImageBitmap | null,
+    width: number,
+    height: number,
+    kind: SurfaceKind = 'image',
+  ): LayerSurface {
+    const key = surfaceKey(layerId, kind)
+    const existing = this.surfaces.get(key)
     if (existing && existing.width === width && existing.height === height) return existing
 
     const canvas = new OffscreenCanvas(Math.max(1, width), Math.max(1, height))
     const context = canvas.getContext('2d')
     if (!context) throw new Error('a 2D context was not available for painting')
     if (source) context.drawImage(source, 0, 0)
+    else if (kind === 'mask') context.fillStyle = '#ffffff'
+    if (!source && kind === 'mask') context.fillRect(0, 0, canvas.width, canvas.height)
     const surface: LayerSurface = { canvas, context, width, height, dirty: null }
-    this.surfaces.set(layerId, surface)
+    this.surfaces.set(key, surface)
     return surface
   }
 
   /** The surface for a layer, made empty if the layer has no pixels yet. */
-  ensure(layerId: string, width: number, height: number): LayerSurface {
-    return this.surfaces.get(layerId) ?? this.create(layerId, null, width, height)
+  ensure(layerId: string, width: number, height: number, kind: SurfaceKind = 'image'): LayerSurface {
+    return this.surfaces.get(surfaceKey(layerId, kind)) ?? this.create(layerId, null, width, height, kind)
   }
 
-  dispose(layerId: string): void {
-    this.surfaces.delete(layerId)
+  dispose(layerId: string, kind: SurfaceKind = 'image'): void {
+    this.surfaces.delete(surfaceKey(layerId, kind))
   }
 
   clear(): void {
     this.surfaces.clear()
   }
 
-  /** Every surface whose pixels have changed since it was last uploaded. */
+  /** Every surface whose pixels have changed since it was last uploaded, with its key. */
   dirtySurfaces(): [string, LayerSurface][] {
     return [...this.surfaces].filter(([, surface]) => surface.dirty !== null)
   }
@@ -113,12 +133,21 @@ export class PaintStore {
     surface.dirty = null
   }
 
-  /** Encodes a layer's current pixels as a PNG, for saving. */
-  async encode(layerId: string): Promise<Uint8Array | null> {
-    const surface = this.surfaces.get(layerId)
+  /**
+   * Encodes a layer's pixels, or its mask, as the PNG the format wants.
+   *
+   * Pixels go through the canvas, which writes RGBA. A mask has to be 8-bit grayscale with no
+   * alpha, which the canvas cannot write, so it is encoded here instead.
+   */
+  async encode(layerId: string, kind: SurfaceKind = 'image'): Promise<Uint8Array | null> {
+    const surface = this.surfaces.get(surfaceKey(layerId, kind))
     if (!surface) return null
-    const blob = await surface.canvas.convertToBlob({ type: 'image/png' })
-    return new Uint8Array(await blob.arrayBuffer())
+    if (kind === 'image') {
+      const blob = await surface.canvas.convertToBlob({ type: 'image/png' })
+      return new Uint8Array(await blob.arrayBuffer())
+    }
+    const image = surface.context.getImageData(0, 0, surface.width, surface.height)
+    return encodeGrayscalePng(surface.width, surface.height, grayscaleFromRgba(image.data, surface.width * surface.height))
   }
 }
 

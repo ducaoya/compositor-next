@@ -131,7 +131,10 @@
     "group": "Group layers (Ctrl+G)",
     "ungroup": "Ungroup (Ctrl+Shift+G)",
     "delete": "Delete layers",
-    "count": "{count} layers"
+    "count": "{count} layers",
+    "addMask": "Add Layer Mask",
+    "removeMask": "Delete Layer Mask",
+    "maskTarget": "Painting the mask"
   },
   "properties": {
     "title": "Properties",

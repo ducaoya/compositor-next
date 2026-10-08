@@ -14,12 +14,16 @@ import { BLEND_MODE_GROUPS, blendModeKey, isFolder, type BlendModeName } from '.
 import {
   addBlankLayer,
   addFolder,
+  addLayerMask,
   beginEdit,
   deleteSelected,
   duplicateSelected,
   endEdit,
   groupSelected,
   hasTexture,
+  paintTarget,
+  removeLayerMask,
+  setMaskEditing,
   historyCancel,
   renameLayer,
   selectLayer,
@@ -116,6 +120,12 @@ const canClip = computed(() => {
 })
 
 const count = computed(() => manifest.value?.layers.length ?? 0)
+
+/** Selecting the mask thumbnail aims the tools at the mask rather than the pixels. */
+function select01(layerId: string): void {
+  selectLayer(layerId, false)
+  setMaskEditing(true)
+}
 </script>
 
 <template>
@@ -223,11 +233,23 @@ const count = computed(() => manifest.value?.layers.length ?? 0)
         <span v-else class="layer__link layer__link--empty" />
 
         <span class="layer__thumbs">
-          <span class="layer__thumb" :class="{ 'layer__thumb--mask': !row.layer.imageFile && isFolder(row.layer) }">
+          <span
+            class="layer__thumb"
+            :class="{
+              'layer__thumb--mask': !row.layer.imageFile && isFolder(row.layer),
+              'layer__thumb--target': row.layer.id === activeLayerId && paintTarget() === 'image',
+            }"
+            @click.stop="row.layer.id === activeLayerId && setMaskEditing(false)"
+          >
             <img v-if="thumbnail(row.layer.id, 'image')" :src="thumbnail(row.layer.id, 'image')!" alt="" />
             <span v-else-if="isFolder(row.layer)" class="layer__folder">▤</span>
           </span>
-          <span v-if="row.layer.maskFile" class="layer__thumb layer__thumb--mask">
+          <span
+            v-if="row.layer.maskFile"
+            class="layer__thumb layer__thumb--mask"
+            :class="{ 'layer__thumb--target': row.layer.id === activeLayerId && paintTarget() === 'mask' }"
+            @click.stop="select01(row.layer.id)"
+          >
             <img v-if="thumbnail(row.layer.id, 'mask')" :src="thumbnail(row.layer.id, 'mask')!" alt="" />
           </span>
         </span>
@@ -258,6 +280,14 @@ const count = computed(() => manifest.value?.layers.length ?? 0)
 
     <footer class="panel__footer">
       <button class="icon" :disabled="!canClip" :title="t('layers.clippingMask')" @click="toggleClipping">↳</button>
+      <button
+        class="icon"
+        :title="activeLayer?.maskFile ? t('layers.removeMask') : t('layers.addMask')"
+        :disabled="!activeLayer || isFolder(activeLayer)"
+        @click="activeLayer?.maskFile ? removeLayerMask() : addLayerMask()"
+      >
+        ▣
+      </button>
       <button class="icon" disabled :title="t('layers.layerEffects')">fx</button>
       <button class="icon" disabled :title="t('layers.adjustmentLayer')">◐</button>
       <span class="panel__footer-gap" />
@@ -488,6 +518,12 @@ const count = computed(() => manifest.value?.layers.length ?? 0)
 
 .layer__thumb--mask {
   filter: grayscale(1);
+}
+
+/* Photoshop draws a white frame around whichever thumbnail the tools are aimed at. */
+.layer__thumb--target {
+  outline: 1px solid #ffffff;
+  outline-offset: -1px;
 }
 
 .layer__folder {
