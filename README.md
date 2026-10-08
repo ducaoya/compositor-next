@@ -15,6 +15,12 @@ compositing core, painting, and the shell around them.
   blend mode. A project saved here opens there and the other way round.
 - **All 24 blend modes**, composited in sRGB exactly as Photoshop does, not in linear light.
 - **The canvas** — GPU compositing, pan, zoom, fit, a pixel-accurate checkerboard, guides.
+- **Adjustment layers, all twelve** — Hue/Saturation, Levels, Curves, Exposure, Gradient Map,
+  Grain, Invert, Black & White, Color Balance, Gaussian Blur, Motion Blur and Add Noise, with an
+  editor for each in the Properties panel. An adjustment changes everything composited below it,
+  masks and opacity included, and Levels, Curves, Exposure and Invert are baked into a 256 × 3
+  lookup table on the CPU so the shader does one fetch per channel instead of a spline evaluation
+  per pixel.
 - **Painting** — brush and eraser with size, hardness, opacity and flow, stroke smoothing, and a
   live tip outline. Strokes upload only the rectangle they touched.
 - **Selections** — rectangle and ellipse marquee with marching ants, Select All, Deselect, and
@@ -33,9 +39,15 @@ compositing core, painting, and the shell around them.
 ## What is not here yet
 
 - Lasso, magic wand, crop, gradients, shapes, text.
-- Adjustment layers and layer effects. They are **read and written faithfully** — the file keeps
-  every setting — but the compositor does not render them yet. The same goes for layer masks: they
-  are read, written and composited, but not yet paintable.
+- Layer effects: stroke, drop shadow, glow and colour overlay. They are **read and written
+  faithfully** — the file keeps every setting — but the compositor does not render them yet.
+- Painting on a layer mask. Masks are read, written, composited and honoured by adjustment layers,
+  but there is no way to paint one yet.
+- Transform handles. A layer can be moved, and its position, size and angle typed, but there are no
+  drag handles for scale and rotate.
+- Lasso, magic wand, and Feather/Expand/Contract on a selection.
+- The per-range bands in Hue/Saturation: the master hue, saturation and lightness apply, the six
+  colour-range bands do not.
 - Selecting a subject, camera RAW, PSD import. The macOS app uses Vision for the first; this will
   use an ONNX segmentation model.
 - Opening a `.comp` by double-clicking it in the OS.
@@ -145,9 +157,10 @@ pnpm check
 - `crates/core` — the format: what loads, what is refused, what survives a round-trip, and the
   Node-written sample project.
 - `crates/shaders` — the WGSL parses, validates, and still matches the blend-mode list.
-- `web` — the blend maths (including the sRGB-not-linear-light check), the layer tree, undo, the
-  layer operations, and the i18n tables (key parity between languages, placeholder parity, pack
-  validation).
+- `web` — the blend maths (including the sRGB-not-linear-light check), the adjustment maths (the
+  Levels formula, the shape-preserving curve, every LUT kind's identity, the shader uniform's
+  layout), the layer tree, undo, the layer operations, and the i18n tables (key parity between
+  languages, placeholder parity, pack validation).
 
 ## Licence
 

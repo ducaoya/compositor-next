@@ -46,7 +46,14 @@ import {
   type LayerRecord,
   type Manifest,
 } from '../model/types'
-import { Compositor, type LayerDraw } from '../render/compositor'
+import { Compositor, type DrawItem } from '../render/compositor'
+import {
+  ADJUSTMENT_KINDS,
+  buildLut,
+  identityAdjustment,
+  type AdjustmentKind,
+  type LayerAdjustment,
+} from '../model/adjustments'
 import { PaintStore, fillSurface, stampSegment, type BrushSettings, type LayerSurface } from '../render/paint'
 import {
   assetKey,
@@ -75,6 +82,9 @@ const message = ref<string | null>(null)
 const dirty = ref(false)
 const compositor = shallowRef<Compositor | null>(null)
 const canRender = ref(false)
+/** Every WebGPU diagnostic seen this session, newest last. A single `message` slot loses the first
+ *  of a cascade, and the first is the one that explains the rest. */
+const gpuErrors = ref<string[]>([])
 const canGPU = ref(true)
 const historyVersion = ref(0)
 
@@ -125,22 +135,34 @@ export const canRedo = computed(() => historyVersion.value >= 0 && history.canRe
 export const undoLabel = computed(() => (historyVersion.value >= 0 ? history.undoLabel : null))
 export const redoLabel = computed(() => (historyVersion.value >= 0 ? history.redoLabel : null))
 
-/** What the compositor draws this frame, bottom to top. */
-export const draws = computed<LayerDraw[]>(() => {
+/** What the compositor draws this frame, bottom to top: layers and adjustments in stack order. */
+export const draws = computed<DrawItem[]>(() => {
   const current = manifest.value
   if (!current) return []
   const byId = indexLayers(current)
-  const result: LayerDraw[] = []
+  const result: DrawItem[] = []
   for (const layer of visibleLeaves(current.layers)) {
-    // Adjustment layers are in the file but this build does not render them yet.
-    if (layer.adjustment !== undefined) continue
     if (isFolder(layer)) continue
+    const opacity = effectiveOpacity(layer, byId)
+    // An adjustment layer changes what is below it rather than drawing anything of its own, which
+    // is why it goes into the same list: order is what decides what it applies to.
+    if (layer.adjustment !== undefined) {
+      result.push({
+        kind: 'adjustment',
+        id: layer.id,
+        opacity,
+        adjustment: layer.adjustment as LayerAdjustment,
+        mask: textures.get(assetKey(layer.id, 'mask')) ?? null,
+      })
+      continue
+    }
     result.push({
+      kind: 'layer',
       id: layer.id,
       texture: textures.get(assetKey(layer.id, 'image')) ?? null,
       mask: textures.get(assetKey(layer.id, 'mask')) ?? null,
       transform: layer.transform,
-      opacity: effectiveOpacity(layer, byId),
+      opacity,
       blendMode: blendModeOf(layer),
     })
   }
@@ -180,6 +202,8 @@ export function useSession() {
     erasing,
     locales,
     locale,
+    activeAdjustment,
+    gpuErrors,
   }
 }
 
@@ -684,6 +708,69 @@ export function toDocument(screenX: number, screenY: number): [number, number] {
   return [(screenX - view.panX) / view.zoom, (screenY - view.panY) / view.zoom]
 }
 
+/** The adjustment on the active layer, if it has one. */
+export const activeAdjustment = computed<LayerAdjustment | null>(() => {
+  const layer = activeLayer.value
+  if (!layer || layer.adjustment === undefined) return null
+  return layer.adjustment as LayerAdjustment
+})
+
+/** Adds an adjustment layer above the active one, at the canvas rectangle. */
+export function addAdjustment(kind: AdjustmentKind): void {
+  const current = manifest.value
+  if (!current) return
+  edit(`New ${kind} Layer`, (manifestNow) => {
+    const layer = doc.createLayer({
+      name: kind,
+      transform: doc.covering(manifestNow.width, manifestNow.height),
+    })
+    layer.adjustment = identityAdjustment(kind)
+    const at = activeLayerId.value
+      ? manifestNow.layers.findIndex((record) => record.id === activeLayerId.value) + 1
+      : manifestNow.layers.length
+    doc.addLayer(manifestNow, layer, at)
+    activeLayerId.value = layer.id
+    selectedIds.value = [layer.id]
+    return true
+  })
+}
+
+/**
+ * Merges a change into the active adjustment.
+ *
+ * Inside a drag the caller wraps this in `beginEdit`/`endEdit`, so a slider is one undo step
+ * rather than one per input event.
+ */
+export function patchAdjustment(patch: Record<string, unknown>): void {
+  const layer = activeLayer.value
+  if (!layer || layer.adjustment === undefined) return
+  const adjustment = layer.adjustment as LayerAdjustment
+  Object.assign(adjustment, patch)
+}
+
+/** Merges a change into one of the adjustment's settings blocks. */
+export function patchAdjustmentSettings(key: string, patch: Record<string, unknown>): void {
+  const layer = activeLayer.value
+  if (!layer || layer.adjustment === undefined) return
+  const adjustment = layer.adjustment as LayerAdjustment
+  const existing = (adjustment[key] as Record<string, unknown> | undefined) ?? {}
+  adjustment[key] = { ...existing, ...patch }
+}
+
+/** Whether an adjustment's settings are the identity, so the panel can say so. */
+export function adjustmentIsIdentity(adjustment: LayerAdjustment): boolean {
+  const lut = buildLut(adjustment)
+  if (lut) {
+    for (let value = 0; value < 256; value += 1) {
+      if (lut[value] !== value || lut[256 + value] !== value || lut[512 + value] !== value) return false
+    }
+    return true
+  }
+  return false
+}
+
+export { ADJUSTMENT_KINDS }
+
 // MARK: - Layer and document coordinates
 
 /** The image size a layer's own pixels have, which its transform places on the document. */
@@ -1171,6 +1258,7 @@ export async function attachCanvas(canvas: HTMLCanvasElement): Promise<void> {
     const target = await Compositor.create(canvas, {
       onError: (text) => {
         message.value = text
+        gpuErrors.value = [...gpuErrors.value.slice(-19), text]
         console.error('[webgpu]', text)
       },
     })
@@ -1268,6 +1356,9 @@ if (typeof window !== 'undefined') {
       invertSelection,
       get message() {
         return message.value
+      },
+      get gpuErrors() {
+        return gpuErrors.value
       },
       openProject,
       newProject,

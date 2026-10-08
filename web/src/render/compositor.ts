@@ -14,14 +14,32 @@
  */
 
 import shaderSource from './compositor.wgsl?raw'
+import adjustSource from './adjust.wgsl?raw'
 import { BLEND_MODES, type BlendModeName, type Transform } from '../model/types'
+import {
+  ADJUST_UNIFORM_VECS,
+  buildLut,
+  packAdjustment,
+  type LayerAdjustment,
+} from '../model/adjustments'
+
+/**
+ * The two shader files as one module.
+ *
+ * WGSL has no `#include`, and the order matters: `compositor.wgsl` declares the adjustment uniform
+ * and its bindings, which `adjust.wgsl` then uses.
+ */
+const MODULE_SOURCE = `${shaderSource}\n${adjustSource}`
 
 const ACCUM_FORMAT: GPUTextureFormat = 'rgba16float'
 /** Bytes per layer of composite uniforms; also the dynamic-offset stride. */
 const PARAMS_BYTES = 64
+/** How many adjustment passes one frame may encode before the uniform slots wrap. */
+const ADJUST_UNIFORM_SLOTS = 32
 const DISPLAY_BYTES = 48
 
 export interface LayerDraw {
+  kind: 'layer'
   id: string
   /** Null for a layer with no pixels yet: it draws nothing. */
   texture: GPUTexture | null
@@ -31,6 +49,24 @@ export interface LayerDraw {
   opacity: number
   blendMode: BlendModeName
 }
+
+/**
+ * An adjustment layer, which changes everything composited below it rather than drawing anything of
+ * its own.
+ *
+ * `lut` is the 256 × 3 table Levels, Curves, Exposure and Invert reduce to; the other kinds compute
+ * in the shader from `adjustment`.
+ */
+export interface AdjustmentDraw {
+  kind: 'adjustment'
+  id: string
+  opacity: number
+  adjustment: LayerAdjustment
+  /** The adjustment layer's own mask, if it has one. */
+  mask: GPUTexture | null
+}
+
+export type DrawItem = LayerDraw | AdjustmentDraw
 
 export interface ViewState {
   zoom: number
@@ -43,6 +79,18 @@ interface Frame {
   context: GPUCanvasContext
   format: GPUTextureFormat
   compositePipeline: GPURenderPipeline
+  /** The adjustment pass, writing to the accumulation's own format. */
+  adjustPipeline: GPURenderPipeline
+  adjustLayout: GPUBindGroupLayout
+  /**
+   * Adjustment uniforms, one slot per pass with a dynamic offset — the same arrangement the
+   * composite uses, and for the same reason. A single buffer written twice before one submit would
+   * leave both passes reading the second write: a two-pass Gaussian would blur one way twice.
+   */
+  adjustUniform: GPUBuffer
+  adjustSampler: GPUSampler
+  /** The 256 × 3 tables the LUT kinds bake to, by adjustment layer. */
+  luts: Map<string, { texture: GPUTexture; signature: string }>
   /**
    * The same shader, writing to an 8-bit target. A pipeline's attachment format is fixed at
    * creation, and the accumulation is `rgba16float` while an export has to be readable as bytes,
@@ -111,8 +159,21 @@ export class Compositor {
     const format = navigator.gpu.getPreferredCanvasFormat()
     context.configure({ device, format, alphaMode: 'opaque' })
 
-    const module = device.createShaderModule({ code: shaderSource, label: 'compositor' })
+    const module = device.createShaderModule({ code: MODULE_SOURCE, label: 'compositor' })
+    // A shader that does not compile takes every pipeline built from it down with it, and the
+    // resulting failure is a bare "invalid due to a previous error" with nothing to go on. Reading
+    // the compilation info is the only way back to the line that broke.
+    void module.getCompilationInfo().then((info) => {
+      for (const message of info.messages) {
+        if (message.type === 'error') {
+          options.onError?.(`shader line ${message.lineNum}:${message.linePos} — ${message.message}`)
+        }
+      }
+    })
 
+    // Every pipeline below is created inside an error scope: a failure there produces an error
+    // object rather than an exception, and the actual reason is only reported once, here.
+    device.pushErrorScope('validation')
     const emptyLayout = device.createBindGroupLayout({ entries: [], label: 'empty' })
     const compositeLayout = device.createBindGroupLayout({
       label: 'composite',
@@ -160,6 +221,36 @@ export class Compositor {
       primitive: { topology: 'triangle-list' },
     })
 
+    const adjustLayout = device.createBindGroupLayout({
+      label: 'adjust',
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.FRAGMENT,
+          buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: ADJUST_UNIFORM_VECS * 16 },
+        },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+      ],
+    })
+    const adjustPipeline = device.createRenderPipeline({
+      label: 'adjust',
+      layout: device.createPipelineLayout({
+        // The module's other bindings have to be declared even though this pass does not use them,
+        // and an empty layout is the only thing that can sit in their slots.
+        bindGroupLayouts: [emptyLayout, emptyLayout, adjustLayout],
+      }),
+      vertex: { module, entryPoint: 'vs_fullscreen' },
+      fragment: { module, entryPoint: 'fs_adjust', targets: [{ format: ACCUM_FORMAT }] },
+      primitive: { topology: 'triangle-list' },
+    })
+
+    void device.popErrorScope().then((error) => {
+      if (error) options.onError?.(`pipeline creation — ${error.message}`)
+    })
+
     const uniformStride = Math.max(256, device.limits.minUniformBufferOffsetAlignment)
     const compositeUniforms = device.createBuffer({
       label: 'composite params',
@@ -169,6 +260,11 @@ export class Compositor {
     const displayUniform = device.createBuffer({
       label: 'display params',
       size: DISPLAY_BYTES,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    })
+    const adjustUniform = device.createBuffer({
+      label: 'adjust params',
+      size: uniformStride * ADJUST_UNIFORM_SLOTS,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     })
 
@@ -200,6 +296,11 @@ export class Compositor {
       context,
       format,
       compositePipeline,
+      adjustPipeline,
+      adjustLayout,
+      adjustUniform,
+      adjustSampler: linearSampler,
+      luts: new Map(),
       flattenPipeline,
       displayPipeline,
       emptyBindGroup,
@@ -293,19 +394,134 @@ export class Compositor {
    *
    * `view` is in device pixels: `panX`/`panY` is where the document's top-left corner sits.
    */
-  render(draws: readonly LayerDraw[], view: ViewState): void {
+  /**
+   * The directions an adjustment's blur runs in.
+   *
+   * A Gaussian is separable, so it runs twice — across and down — for the price of one multiply
+   * instead of a full kernel per pixel. A motion blur runs once, along its angle.
+   */
+  private static blurDirections(adjustment: LayerAdjustment): [number, number][] {
+    if (adjustment.kind === 'Gaussian Blur') {
+      return [
+        [1, 0],
+        [0, 1],
+      ]
+    }
+    if (adjustment.kind === 'Motion Blur') {
+      // The angle is counterclockwise from horizontal, and the canvas has y pointing down.
+      const radians = ((adjustment.motionAngle ?? 0) * Math.PI) / 180
+      return [[Math.cos(radians), -Math.sin(radians)]]
+    }
+    return [[0, 0]]
+  }
+
+  /**
+   * The 256 × 3 table for a LUT kind, rebuilt only when the settings behind it change.
+   *
+   * Rebuilding every frame would put a spline evaluation per byte on the CPU side of a live slider
+   * drag; rebuilding never would leave a preview showing the last drag's curve.
+   */
+  private lutFor(item: AdjustmentDraw): GPUTexture {
+    const frame = this.frame
+    const table = buildLut(item.adjustment)
+    const signature = table
+      ? [
+          item.adjustment.kind,
+          JSON.stringify(item.adjustment.levels ?? null),
+          JSON.stringify(item.adjustment.curves ?? null),
+          JSON.stringify(item.adjustment.exposureSettings ?? null),
+        ].join('|')
+      : 'none'
+
+    const cached = frame.luts.get(item.id)
+    if (cached && cached.signature === signature) return cached.texture
+    cached?.texture.destroy()
+
+    const texture = frame.device.createTexture({
+      label: `lut ${item.id}`,
+      size: [256, 3, 1],
+      format: 'rgba8unorm',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    })
+    if (table) {
+      // One channel per row — red, green, blue — with the value in the red component.
+      const rgba = new Uint8Array(256 * 3 * 4)
+      for (let index = 0; index < 256 * 3; index += 1) {
+        rgba[index * 4] = table[index]
+        rgba[index * 4 + 3] = 255
+      }
+      frame.device.queue.writeTexture(
+        { texture },
+        rgba,
+        { bytesPerRow: 256 * 4, rowsPerImage: 3 },
+        [256, 3, 1],
+      )
+    }
+    frame.luts.set(item.id, { texture, signature })
+    return texture
+  }
+
+  /** One adjustment pass: read the accumulation, write the adjusted result to the other one. */
+  private runAdjustPass(
+    encoder: GPUCommandEncoder,
+    item: AdjustmentDraw,
+    read: GPUTexture,
+    write: GPUTexture,
+    direction: [number, number],
+    slot: number,
+  ): void {
+    const frame = this.frame
+    const [width, height] = frame.size
+    const offset = (slot % ADJUST_UNIFORM_SLOTS) * frame.uniformStride
+    frame.device.queue.writeBuffer(
+      frame.adjustUniform,
+      offset,
+      packAdjustment(item.adjustment, item.opacity, width, height, direction, item.mask !== null),
+    )
+    const bindGroup = frame.device.createBindGroup({
+      label: `adjust ${item.id}`,
+      layout: frame.adjustLayout,
+      entries: [
+        { binding: 0, resource: { buffer: frame.adjustUniform, size: ADJUST_UNIFORM_VECS * 16 } },
+        { binding: 1, resource: read.createView() },
+        { binding: 2, resource: this.lutFor(item).createView() },
+        { binding: 3, resource: frame.adjustSampler },
+        { binding: 4, resource: (item.mask ?? frame.dummy).createView() },
+      ],
+    })
+    const pass = encoder.beginRenderPass({
+      label: `adjust ${item.id}`,
+      colorAttachments: [
+        {
+          view: write.createView(),
+          loadOp: 'clear',
+          storeOp: 'store',
+          clearValue: { r: 0, g: 0, b: 0, a: 0 },
+        },
+      ],
+    })
+    pass.setPipeline(frame.adjustPipeline)
+    pass.setBindGroup(0, frame.emptyBindGroup)
+    pass.setBindGroup(1, frame.emptyBindGroup)
+    pass.setBindGroup(2, bindGroup, [offset])
+    pass.draw(3)
+    pass.end()
+  }
+
+  render(items: readonly DrawItem[], view: ViewState): void {
     const frame = this.frame
     if (!frame.accum) return
     const [width, height] = frame.size
     const canvas = frame.context.canvas as HTMLCanvasElement
 
-    const visible = draws.filter((draw) => draw.texture !== null)
-    this.ensureUniformRoom(Math.max(1, visible.length))
+    const visible = items.filter((item) => item.kind === 'adjustment' || item.texture !== null)
+    const layers = visible.filter((item): item is LayerDraw => item.kind === 'layer')
+    this.ensureUniformRoom(Math.max(1, layers.length))
 
     // Pack every layer's uniforms into one buffer, at the dynamic-offset stride.
     const floatsPerLayer = frame.uniformStride / 4
-    const scratch = new Float32Array(floatsPerLayer * Math.max(1, visible.length))
-    visible.forEach((draw, index) => {
+    const scratch = new Float32Array(floatsPerLayer * Math.max(1, layers.length))
+    layers.forEach((draw, index) => {
       const base = index * floatsPerLayer
       const mode = Math.max(0, BLEND_MODES.indexOf(draw.blendMode))
       scratch.set([width, height, draw.opacity, mode], base)
@@ -333,10 +549,26 @@ export class Compositor {
 
     const encoder = frame.device.createCommandEncoder({ label: 'compositor' })
     let [read, write] = frame.accum
+    let layerIndex = 0
 
-    for (let index = 0; index < visible.length; index += 1) {
+    const advance = () => {
+      const swap = read
+      read = write
+      write = swap
+    }
+
+    let adjustSlot = 0
+    for (const item of visible) {
+      if (item.kind === 'adjustment') {
+        for (const direction of Compositor.blurDirections(item.adjustment)) {
+          this.runAdjustPass(encoder, item, read, write, direction, adjustSlot)
+          adjustSlot += 1
+          advance()
+        }
+        continue
+      }
       const pass = encoder.beginRenderPass({
-        label: `layer ${index}`,
+        label: `layer ${layerIndex}`,
         colorAttachments: [
           {
             view: write.createView(),
@@ -348,12 +580,11 @@ export class Compositor {
       })
       pass.setPipeline(frame.compositePipeline)
       pass.setBindGroup(0, frame.emptyBindGroup)
-      pass.setBindGroup(1, this.bindGroupFor(visible[index], read), [index * frame.uniformStride])
+      pass.setBindGroup(1, this.bindGroupFor(item, read), [layerIndex * frame.uniformStride])
       pass.draw(3)
       pass.end()
-      const swap = read
-      read = write
-      write = swap
+      advance()
+      layerIndex += 1
     }
 
     frame.device.queue.writeBuffer(
@@ -563,6 +794,9 @@ export class Compositor {
   destroy(): void {
     for (const texture of this.frame.accum ?? []) texture.destroy()
     this.frame.accum = null
+    for (const entry of this.frame.luts.values()) entry.texture.destroy()
+    this.frame.luts.clear()
+    this.frame.adjustUniform.destroy()
     for (const texture of this.frame.layerTextures.values()) texture.destroy()
     this.frame.layerTextures.clear()
     this.frame.exportTexture?.destroy()

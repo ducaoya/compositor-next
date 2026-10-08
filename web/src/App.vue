@@ -17,8 +17,10 @@ import OptionsBar from './components/OptionsBar.vue'
 import PropertiesPanel from './components/PropertiesPanel.vue'
 import StatusBar from './components/StatusBar.vue'
 import ToolRail from './components/ToolRail.vue'
+import { ADJUSTMENT_KINDS, adjustmentKindKey } from './model/adjustments'
 import { SHORTCUT_CYCLES } from './model/tools'
 import {
+  addAdjustment,
   addBlankLayer,
   addFolder,
   cycleTool,
@@ -131,6 +133,13 @@ const menus = computed<Menu[]>(() => [
     label: t('menu.layer'),
     items: [
       { label: t('menu.newLayer'), shortcut: 'Ctrl+Shift+N', run: addBlankLayer },
+      { label: t('adjust.title'), heading: true },
+      ...ADJUSTMENT_KINDS.map((kind) => ({
+        label: t(adjustmentKindKey(kind)),
+        run: () => addAdjustment(kind),
+      })),
+      { label: '' },
+      { label: t('menu.adjustmentHeading'), heading: true },
       { label: t('menu.newGroup'), run: addFolder },
       { label: t('menu.duplicateLayer'), shortcut: 'Ctrl+J', run: duplicateSelected },
       { label: '' },

@@ -8,11 +8,12 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import AdjustmentPanel from './AdjustmentPanel.vue'
 import { SAMPLINGS, isFolder, samplingKey } from '../model/types'
 import { applyEdit, beginEdit, endEdit, useSession } from '../state/session'
 
 const { t } = useI18n()
-const { manifest, activeLayer, limits } = useSession()
+const { manifest, activeLayer, limits, activeAdjustment } = useSession()
 
 const folderSelected = computed(() => (activeLayer.value ? isFolder(activeLayer.value) : false))
 
@@ -83,7 +84,12 @@ const pixelSize = computed(() => {
         </label>
       </div>
 
-      <div v-if="!folderSelected" class="group">
+      <div v-if="activeAdjustment" class="group">
+        <div class="group__title">{{ t('adjust.title') }}</div>
+        <AdjustmentPanel />
+      </div>
+
+      <div v-if="!folderSelected && !activeAdjustment" class="group">
         <div class="group__title">{{ t('properties.transform') }}</div>
         <div class="grid">
           <label class="field field--number">

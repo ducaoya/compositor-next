@@ -409,13 +409,16 @@ function browserBackend(): Backend {
     writable: false,
 
     async openProject() {
+      // The manifest is cloned on every open. Handing back the same object would mean editing a
+      // document and reopening it showed the edits still applied, which is not what reopening a
+      // file does anywhere else.
       current ??= await demoProject()
-      return current
+      return { ...current, manifest: structuredClone(current.manifest) }
     },
 
     async createProject() {
       current = await demoProject()
-      return current
+      return { ...current, manifest: structuredClone(current.manifest) }
     },
 
     async saveProject(project, manifest) {

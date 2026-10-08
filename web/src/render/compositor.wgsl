@@ -19,6 +19,42 @@ struct CompositeParams {
   d: vec4f,
 };
 
+/// One adjustment layer's settings, laid out as `vec4`s so the packing on the TypeScript side is a
+/// `Float32Array.set` at fixed offsets rather than a struct-layout negotiation. `adjust.wgsl` reads
+/// these fields; the two files are concatenated into one module.
+struct AdjustParams {
+  // x: kind index, y: opacity, z: canvas width, w: canvas height
+  p0: vec4f,
+  // exposure, offset, gamma, colorize
+  p1: vec4f,
+  // hue, saturation, lightness, unused
+  p2: vec4f,
+  // grain: amount, size, roughness, seed
+  p3: vec4f,
+  // noise: amount, gaussian, monochromatic, seed
+  p4: vec4f,
+  // blur: radius, direction x, direction y, 1 when the lookup table is used
+  p5: vec4f,
+  // black & white: reds, yellows, greens, cyans
+  p6: vec4f,
+  // black & white: blues, magentas, tint, tint hue
+  p7: vec4f,
+  // tint saturation, gradient reversed, preserve luminosity, unused
+  p8: vec4f,
+  // gradient map: shadows
+  p9: vec4f,
+  // gradient map: highlights
+  p10: vec4f,
+  // colour balance: shadows
+  p11: vec4f,
+  // colour balance: midtones
+  p12: vec4f,
+  // colour balance: highlights
+  p13: vec4f,
+  // x: 1 when the adjustment layer has a mask
+  p14: vec4f,
+};
+
 struct DisplayParams {
   // x, y: screen size in pixels; z: zoom
   a: vec4f,
@@ -40,6 +76,12 @@ struct DisplayParams {
 @group(1) @binding(3) var maskTex: texture_2d<f32>;
 @group(1) @binding(4) var linearSampler: sampler;
 @group(1) @binding(5) var nearestSampler: sampler;
+
+@group(2) @binding(0) var<uniform> adjust: AdjustParams;
+@group(2) @binding(1) var adjustSource: texture_2d<f32>;
+@group(2) @binding(2) var lutTex: texture_2d<f32>;
+@group(2) @binding(3) var adjustSampler: sampler;
+@group(2) @binding(4) var adjustMaskTex: texture_2d<f32>;
 
 // MARK: - Blend helpers
 
