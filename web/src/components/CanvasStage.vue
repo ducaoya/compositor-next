@@ -71,6 +71,7 @@ const {
   showsGrid,
   gridSpacing,
   gridSubdivisions,
+  renderPaused,
   wandTolerance,
   wandContiguous,
 } = useSession()
@@ -187,6 +188,9 @@ let drag: Drag = { kind: 'none' }
 
 function schedule(): void {
   trace.schedules += 1
+  // A paused loop still records that a render is wanted; it just does not take one, so a readback
+  // is the only thing drawing.
+  if (renderPaused.value) return
   needsRender = true
   if (frame) return
   frame = requestAnimationFrame(() => {

@@ -115,6 +115,15 @@ const message = ref<string | null>(null)
 const dirty = ref(false)
 const compositor = shallowRef<Compositor | null>(null)
 const canRender = ref(false)
+/**
+ * Stops the canvas's own render loop.
+ *
+ * Anything that reads the frame back has to do it while nothing else is drawing: `render` reuses a
+ * ping-pong pair, so a second render between the one you asked for and the readback hands you a
+ * different frame. Every measurement taken through a probe before this existed was racing the
+ * loop, which is why two probes of the same feature disagreed.
+ */
+const renderPaused = ref(false)
 /** Every WebGPU diagnostic seen this session, newest last. A single `message` slot loses the first
  *  of a cascade, and the first is the one that explains the rest. */
 const gpuErrors = ref<string[]>([])
@@ -582,6 +591,7 @@ export function useSession() {
     gridSpacing,
     gridSubdivisions,
     paletteOpen,
+    renderPaused,
     setGrid,
     addLassoPoint,
     closeLasso,
@@ -2844,9 +2854,46 @@ if (typeof window !== 'undefined') {
       flushPaint,
       reloadFromDisk,
       watchProject,
+      addAdjustment,
+      renderAndRead,
+      pauseRender,
+      resumeRender,
+      get renderPaused() {
+        return renderPaused.value
+      },
     },
     configurable: true,
   })
+}
+
+export function pauseRender(): void {
+  renderPaused.value = true
+}
+
+export function resumeRender(): void {
+  renderPaused.value = false
+}
+
+/**
+ * Renders the current document and reads the frame back, with nothing else drawing.
+ *
+ * The one supported way to inspect pixels. It pauses the loop, flushes whatever the brush left
+ * pending, renders, and reads — in that order, with nothing able to happen in between.
+ */
+export async function renderAndRead(): Promise<{ width: number; height: number; data: number[] } | null> {
+  const target = compositor.value
+  if (!target) return null
+  pauseRender()
+  try {
+    flushPaint()
+    const dpr = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1
+    target.render(draws.value, { zoom: view.zoom * dpr, panX: view.panX * dpr, panY: view.panY * dpr })
+    const frame = await target.flatten()
+    if (!frame) return null
+    return { width: frame.width, height: frame.height, data: Array.from(frame.data) }
+  } finally {
+    resumeRender()
+  }
 }
 
 /** Marks an asset as rewritten, so a save writes bytes rather than copying the old file. */
