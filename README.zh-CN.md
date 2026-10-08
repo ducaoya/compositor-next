@@ -125,5 +125,4 @@ bug —— 记录在 [docs/architecture.md](docs/architecture.md)。
 
 如果你是原作者，希望这里的措辞或署名方式有所调整，请开 issue。
 
-本项目采用 **MIT 协议**发布。发布前请把 [LICENSE](LICENSE) 里那行占位版权署名替换为你自己的
-名字或实体。
+本项目采用 **MIT 协议**发布，Copyright (c) 2026 ducaoya <ducaoya@gmail.com>。

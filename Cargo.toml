@@ -6,7 +6,7 @@ members = ["crates/*", "src-tauri"]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/local/compositor-next"
+# repository = "https://github.com/<you>/<repo>"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

@@ -2,6 +2,8 @@
   "name": "@compositor/web",
   "private": true,
   "version": "0.1.0",
+  "author": "ducaoya <ducaoya@gmail.com>",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",

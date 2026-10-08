@@ -144,5 +144,5 @@ and a different rendering stack. What was derived from it is the design:
 If you are the author of the original and would like anything here worded or attributed
 differently, please open an issue.
 
-This project is released under the **MIT License**. Replace the placeholder copyright line in
-[LICENSE](LICENSE) with your own name or entity before publishing.
+This project is released under the **MIT License**, Copyright (c) 2026 ducaoya
+<ducaoya@gmail.com>.
