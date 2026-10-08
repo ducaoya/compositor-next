@@ -13,6 +13,7 @@ import { useI18n } from 'vue-i18n'
 import CanvasStage from './components/CanvasStage.vue'
 import LayersPanel from './components/LayersPanel.vue'
 import NewCanvasSheet from './components/NewCanvasSheet.vue'
+import DimensionSheet from './components/DimensionSheet.vue'
 import SelectionAmountSheet from './components/SelectionAmountSheet.vue'
 import OptionsBar from './components/OptionsBar.vue'
 import PropertiesPanel from './components/PropertiesPanel.vue'
@@ -33,14 +34,26 @@ import {
   fit,
   groupSelected,
   importImages,
+  cancelCrop,
   chooseLocale,
+  copyMerged,
+  editLayerMask,
+  exportJPEG,
+  flipCanvas,
   installLanguagePack,
   invertSelection,
   loadLanguagePacks,
   moveActive,
   newCanvasPrompt,
   openProject,
+  loadLayerSelection,
+  loadMaskSelection,
+  mergeDown,
+  mergeLayers,
+  nudgeActive,
+  openDimensionPrompt,
   openLanguageFolder,
+  applyCrop,
   promptSelectionAmount,
   redo,
   reloadLanguagePacks,
@@ -49,12 +62,26 @@ import {
   undo,
   ungroupSelected,
   useSession,
+  trimTransparent,
   zoomBy,
   zoomTo,
 } from './state/session'
 
 const { t, locale } = useI18n()
-const { manifest, foreground, background, dirty, busy, locales, selection } = useSession()
+const {
+  manifest,
+  foreground,
+  background,
+  dirty,
+  busy,
+  selection,
+  selectedIds,
+  activeLayer,
+  mergeTitle,
+  canMergeDown,
+  cropRect,
+  locales,
+} = useSession()
 
 interface MenuItem {
   label?: string
@@ -95,6 +122,7 @@ const menus = computed<Menu[]>(() => [
         enabled: () => dirty.value,
       },
       { label: t('menu.exportPng'), shortcut: 'Ctrl+E', run: () => void exportPNG() },
+      { label: t('menu.exportJpeg'), run: () => void exportJPEG() },
     ],
   },
   {
@@ -106,6 +134,8 @@ const menus = computed<Menu[]>(() => [
       { label: t('menu.fillForeground'), run: () => fillLayer({ ...foreground }) },
       { label: t('menu.fillBackground'), run: () => fillLayer({ ...background }) },
       { label: t('menu.clear'), shortcut: 'Delete', run: () => fillLayer(null) },
+      { label: '' },
+      { label: t('menu.copyMerged'), shortcut: 'Ctrl+Shift+C', run: () => void copyMerged(), enabled: () => manifest.value !== null },
       { label: '' },
       { label: t('language.title'), heading: true },
       ...locales.value.map((entry) => ({
@@ -126,9 +156,12 @@ const menus = computed<Menu[]>(() => [
   {
     label: t('menu.image'),
     items: [
-      { label: t('menu.canvasSize'), enabled: () => false },
-      { label: t('menu.imageSize'), enabled: () => false },
-      { label: t('menu.trim'), enabled: () => false },
+      { label: t('menu.canvasSize'), run: () => openDimensionPrompt('canvas'), enabled: () => manifest.value !== null },
+      { label: t('menu.imageSize'), run: () => openDimensionPrompt('image'), enabled: () => manifest.value !== null },
+      { label: t('menu.trim'), run: () => trimTransparent(), enabled: () => manifest.value !== null },
+      { label: '' },
+      { label: t('menu.flipCanvasH'), run: () => flipCanvas(true), enabled: () => manifest.value !== null },
+      { label: t('menu.flipCanvasV'), run: () => flipCanvas(false), enabled: () => manifest.value !== null },
     ],
   },
   {
@@ -151,6 +184,13 @@ const menus = computed<Menu[]>(() => [
       { label: t('menu.bringForward'), shortcut: 'Ctrl+]', run: () => moveActive(1) },
       { label: t('menu.sendBackward'), shortcut: 'Ctrl+[', run: () => moveActive(-1) },
       { label: '' },
+      { label: '' },
+      { label: mergeTitle.value, shortcut: 'Ctrl+E', run: () => (targetIdsCount() > 1 ? mergeLayers() : mergeDown()), enabled: () => canMergeDown.value || targetIdsCount() > 1 },
+      { label: '' },
+      { label: t('menu.invertMask'), run: () => editLayerMask('invert'), enabled: () => activeLayer.value?.maskFile !== undefined },
+      { label: t('menu.blurMask'), run: () => editLayerMask('blur', 10), enabled: () => activeLayer.value?.maskFile !== undefined },
+      { label: t('menu.featherMask'), run: () => editLayerMask('feather', 20), enabled: () => activeLayer.value?.maskFile !== undefined },
+      { label: '' },
       { label: t('menu.deleteLayer'), run: deleteSelected },
     ],
   },
@@ -160,6 +200,9 @@ const menus = computed<Menu[]>(() => [
       { label: t('menu.selectAll'), shortcut: 'Ctrl+A', run: selectAll },
       { label: t('menu.deselect'), shortcut: 'Ctrl+D', run: deselect },
       { label: t('menu.inverse'), shortcut: 'Ctrl+Shift+I', run: invertSelection },
+      { label: '' },
+      { label: t('select.loadPixels'), run: loadLayerSelection, enabled: () => activeLayer.value?.imageFile !== undefined },
+      { label: t('select.loadMask'), run: loadMaskSelection, enabled: () => activeLayer.value?.maskFile !== undefined },
       { label: '' },
       { label: t('select.feather') + '…', run: () => promptSelectionAmount('feather'), enabled: () => selection.value !== null },
       { label: t('select.expand') + '…', run: () => promptSelectionAmount('expand'), enabled: () => selection.value !== null },
@@ -190,6 +233,11 @@ const menus = computed<Menu[]>(() => [
 ])
 
 /** Whether the shell can reach the filesystem, which decides if a folder can be opened. */
+/** How many layers an operation would apply to, which decides what the merge item says. */
+function targetIdsCount(): number {
+  return Math.max(1, selectedIds.value.length)
+}
+
 function inTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }
@@ -242,6 +290,8 @@ function onKeyDown(event: KeyboardEvent): void {
     if (key === 'n' && shift) return run(addBlankLayer)
     if (key === '0') return run(fit)
     if (key === '1') return run(() => zoomTo(1))
+    if (key === 'e') return run(() => void exportPNG())
+    if (key === 'c' && shift) return run(() => void copyMerged())
     if (key === ']') return run(() => moveActive(1))
     if (key === '[') return run(() => moveActive(-1))
     if (key === '=' || key === '+') return run(() => zoomBy(1.25))
@@ -254,6 +304,25 @@ function onKeyDown(event: KeyboardEvent): void {
     event.preventDefault()
     cycleTool(upper)
     return
+  }
+  // The arrow keys nudge the active layer by a pixel, or by ten with Shift, as Photoshop's do.
+  if (event.key.startsWith('Arrow')) {
+    const step = event.shiftKey ? 10 : 1
+    const dx = event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0
+    const dy = event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0
+    if (dx !== 0 || dy !== 0) {
+      event.preventDefault()
+      nudgeActive(dx, dy)
+      return
+    }
+  }
+  if (event.key === 'Enter' && cropRect.value) {
+    event.preventDefault()
+    return applyCrop()
+  }
+  if (event.key === 'Escape' && cropRect.value) {
+    event.preventDefault()
+    return cancelCrop()
   }
   switch (event.key) {
     case 'Delete':
@@ -353,6 +422,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown))
     <StatusBar />
     <NewCanvasSheet />
     <SelectionAmountSheet />
+    <DimensionSheet />
   </div>
 </template>
 

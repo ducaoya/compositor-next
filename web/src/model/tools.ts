@@ -99,7 +99,7 @@ export const TOOLS: ToolDefinition[] = [
     id: 'crop',
     labelKey: 'tools.crop',
     shortcut: 'C',
-    implemented: false,
+    implemented: true,
     icon: `
       <path d="M7.5 2.5V16a.5.5 0 0 0 .5.5h13.5" />
       <path d="M2.5 7.5H16a.5.5 0 0 1 .5.5v13.5" />`,
@@ -161,7 +161,7 @@ export const TOOLS: ToolDefinition[] = [
     id: 'gradient',
     labelKey: 'tools.gradient',
     shortcut: 'G',
-    implemented: false,
+    implemented: true,
     icon: `
       <rect x="3" y="4.5" width="18" height="15" rx="1" />
       <path d="M3.6 18.4h16.8M3.6 16h16.8M3.6 13.8h16.8M3.6 12h16.8M3.6 10.6h16.8M3.6 9.6h16.8" opacity=".65" />`,
@@ -202,7 +202,7 @@ export const TOOLS: ToolDefinition[] = [
     id: 'shape',
     labelKey: 'tools.shape',
     shortcut: 'U',
-    implemented: false,
+    implemented: true,
     icon: `
       <rect x="2.5" y="2.5" width="12" height="12" rx="1" />
       <circle cx="15" cy="15" r="6.5" />`,

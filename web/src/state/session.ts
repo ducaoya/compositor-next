@@ -25,6 +25,7 @@ import {
   type LocaleInfo,
 } from '../i18n'
 import {
+  clipToSelection,
   ellipseSelection,
   fullSelection,
   inverted,
@@ -36,12 +37,17 @@ import {
 } from '../model/selection'
 import {
   blurMask,
+  combineMasks,
+  createMask,
   dilateMask,
   erodeMask,
   invertMask,
   magicWandMask,
+  maskBounds,
+  maskFromAlpha,
   maskFromShape,
   type Mask,
+  type SelectionMode,
 } from '../model/selectionMask'
 import { SHORTCUT_CYCLES, type ToolId } from '../model/tools'
 import {
@@ -65,7 +71,15 @@ import {
   type AdjustmentKind,
   type LayerAdjustment,
 } from '../model/adjustments'
-import { PaintStore, fillSurface, stampSegment, type BrushSettings, type LayerSurface } from '../render/paint'
+import {
+  PaintStore,
+  compositeInto,
+  fillSurface,
+  stampSegment,
+  type BrushSettings,
+  type CompositeLayer,
+  type LayerSurface,
+} from '../render/paint'
 import {
   assetKey,
   backend,
@@ -131,6 +145,42 @@ const maskEditingRef = ref(false)
 /** Surfaces whose pixels have been painted, so a save re-encodes those and nothing else. */
 const modifiedSurfaces = new Set<string>()
 /** What the user is being asked for: a feather radius, or how far to grow or shrink. */
+/** The rectangle the crop tool has dragged out, before it is applied. */
+const cropRect = ref<{ x: number; y: number; width: number; height: number } | null>(null)
+/** The size prompt, shared by Canvas Size and Image Size, which differ only in what they do. */
+export const dimensionPrompt = reactive({
+  open: false,
+  mode: 'canvas' as 'canvas' | 'image',
+  width: 0,
+  height: 0,
+  anchor: 'center' as 'topLeft' | 'center' | 'centerTop',
+})
+
+export function openDimensionPrompt(mode: 'canvas' | 'image'): void {
+  const current = manifest.value
+  if (!current) return
+  dimensionPrompt.mode = mode
+  dimensionPrompt.width = current.width
+  dimensionPrompt.height = current.height
+  dimensionPrompt.anchor = 'center'
+  dimensionPrompt.open = true
+}
+
+export function setCropRect(rect: { x: number; y: number; width: number; height: number } | null): void {
+  cropRect.value = rect
+}
+
+export function applyCrop(): void {
+  const rect = cropRect.value
+  if (!rect) return
+  cropRect.value = null
+  cropTo(rect.x, rect.y, rect.width, rect.height)
+}
+
+export function cancelCrop(): void {
+  cropRect.value = null
+}
+
 export const selectionAmountPrompt = reactive({
   open: false,
   mode: 'feather' as 'feather' | 'expand' | 'contract',
@@ -143,6 +193,17 @@ const layerImages = reactive(new Map<string, { width: number; height: number }>(
 const erasing = ref(false)
 /** The Magic Wand's settings, which its options bar edits. */
 const wandTolerance = ref(32)
+/** How a new selection joins the one already there. */
+const selectionMode = ref<SelectionMode>('new')
+/** The gradient and shape tools' settings. */
+const gradient = reactive({
+  kind: 'linear' as 'linear' | 'radial',
+  reverse: false,
+  opacity: 1,
+  from: 'foreground' as 'foreground' | 'background',
+  to: 'background' as 'foreground' | 'background',
+})
+const shape = reactive({ kind: 'rectangle' as 'rectangle' | 'ellipse', filled: true, lineWidth: 8 })
 const wandContiguous = ref(true)
 
 // `structuredClone` refuses a Vue proxy, and the document is JSON by definition, so the history
@@ -245,6 +306,27 @@ export function useSession() {
     wandTolerance,
     wandContiguous,
     maskEditing: maskEditingRef,
+    mergeTitle,
+    canMergeDown,
+    mergeLayers,
+    mergeDown,
+    copyMerged,
+    exportJPEG,
+    resizeCanvas,
+    resizeImage,
+    cropTo,
+    trimTransparent,
+    flipCanvas,
+    editLayerMask,
+    cropRect,
+    dimensionPrompt,
+    selectionMode,
+    gradient,
+    shape,
+    loadLayerSelection,
+    loadMaskSelection,
+    drawGradient,
+    drawShape,
   }
 }
 
@@ -917,6 +999,8 @@ export function ensureSurface(layer: LayerRecord, kind: import('../render/paint'
 
 let strokeLayer: string | null = null
 let strokeKind: import('../render/paint').SurfaceKind = 'image'
+/** Where the last stroke ended, in document coordinates, for a Shift-click's straight line. */
+let lastStrokeEnd: [number, number] | null = null
 let strokeLast: [number, number] | null = null
 let strokeSmoothed: [number, number] | null = null
 
@@ -925,7 +1009,7 @@ function brushErasing(): boolean {
   return tool.value === 'eraser'
 }
 
-export function beginStroke(x: number, y: number): void {
+export function beginStroke(x: number, y: number, extendFromLast = false): void {
   const layer = paintableLayer()
   if (!layer) return
   const kind = paintTarget()
@@ -942,6 +1026,12 @@ export function beginStroke(x: number, y: number): void {
 
   strokeLayer = layer.id
   strokeKind = kind
+  // Shift continues from where the last stroke left off, as a straight line.
+  if (extendFromLast && lastStrokeEnd) {
+    const [fromX, fromY] = documentToLayer(layer, lastStrokeEnd[0], lastStrokeEnd[1])
+    surface.dirty = unionDirty(surface.dirty, stampSegment(surface, [fromX, fromY], [lx, ly], radius, brush, brushErasing(), clip))
+    strokeLast = [lx, ly]
+  }
   strokeLast = [lx, ly]
   strokeSmoothed = [lx, ly]
   surface.dirty = unionDirty(
@@ -975,6 +1065,15 @@ export function extendStroke(x: number, y: number): void {
 }
 
 export function endStroke(): void {
+  // Kept in document coordinates so it survives a change of layer or zoom.
+  if (strokeLast && strokeLayer) {
+    const layer = manifest.value?.layers.find((record) => record.id === strokeLayer)
+    if (layer) {
+      const matrix = layerMatrix(layer)
+      const point = matrix.transformPoint(new DOMPoint(strokeLast[0], strokeLast[1]))
+      lastStrokeEnd = [point.x, point.y]
+    }
+  }
   strokeLayer = null
   strokeLast = null
   strokeSmoothed = null
@@ -1090,11 +1189,619 @@ export function toggleMaskEnabled(): void {
   })
 }
 
+// MARK: - Loading a selection from what is already there
+
+/**
+ * Select -> Layer's Pixels: the layer's own alpha, thresholded.
+ *
+ * Thresholded rather than soft because a selection is a selection: a pixel is in it or it is not,
+ * and a layer with a soft edge should not make a selection with a soft edge by accident. Feather
+ * is the tool for that.
+ */
+export function loadLayerSelection(): void {
+  const layer = paintableLayer()
+  const current = manifest.value
+  if (!layer || !current) return
+  const surface = paintStore.surface(layer.id, 'image')
+  if (!surface) return
+  const image = surface.context.getImageData(0, 0, surface.width, surface.height)
+  const mask = createMask(current.width, current.height)
+  const matrix = layerMatrix(layer)
+  const inverse = matrix.inverse()
+  // Walk the layer's own pixels and mark the document pixels they cover, so a scaled or rotated
+  // layer selects where it actually is rather than where its rectangle is.
+  for (let y = 0; y < surface.height; y += 1) {
+    for (let x = 0; x < surface.width; x += 1) {
+      if (image.data[(y * surface.width + x) * 4 + 3] < 128) continue
+      const point = matrix.transformPoint(new DOMPoint(x + 0.5, y + 0.5))
+      const px = Math.floor(point.x)
+      const py = Math.floor(point.y)
+      if (px < 0 || py < 0 || px >= mask.width || py >= mask.height) continue
+      mask.data[py * mask.width + px] = 255
+    }
+  }
+  void inverse
+  if (maskBounds(mask) === null) {
+    message.value = t('message.selectionEmpty')
+    return
+  }
+  setSelection(maskSelection(mask))
+}
+
+/** Select -> Mask's Black Areas: the mask, as coverage. */
+export function loadMaskSelection(): void {
+  const layer = activeLayer.value
+  if (!layer?.maskFile) return
+  const surface = paintStore.surface(layer.id, 'mask')
+  if (!surface) return
+  const image = surface.context.getImageData(0, 0, surface.width, surface.height)
+  setSelection(maskSelection(maskFromAlpha(image.data, surface.width, surface.height, 1)))
+}
+
+// MARK: - Gradients and shapes
+
+/**
+ * Paints a gradient along the line dragged.
+ *
+ * Drawn with the canvas's own gradient, which interpolates in sRGB between two stops — the same
+ * thing Photoshop does, and the same thing the compositor does for `CILinearGradient` in the
+ * original.
+ */
+export function drawGradient(from: [number, number], to: [number, number]): void {
+  const layer = paintableLayer()
+  if (!layer) return
+  const surface = ensureSurface(layer, paintTarget())
+  const clip = currentSelectionClip(layer)
+  const start = documentToLayer(layer, from[0], from[1])
+  const end = documentToLayer(layer, to[0], to[1])
+  const first = gradient.from === 'foreground' ? { ...foreground } : { ...background }
+  const second = gradient.reverse
+    ? gradient.to === 'foreground'
+      ? { ...foreground }
+      : { ...background }
+    : gradient.to === 'foreground'
+      ? { ...foreground }
+      : { ...background }
+
+  history.begin('Gradient', manifest.value!)
+  const context = surface.context
+  context.save()
+  if (clip?.maskCanvas) {
+    // A masked selection needs the gradient cut down before it lands, as the brush does.
+    const scratch = new OffscreenCanvas(surface.width, surface.height)
+    const scratchContext = scratch.getContext('2d')
+    if (scratchContext) {
+      paintGradient(scratchContext, start, end, first, second, gradient.kind)
+      scratchContext.globalCompositeOperation = 'destination-in'
+      scratchContext.setTransform(clip.documentToLayer ?? new DOMMatrix())
+      scratchContext.drawImage(clip.maskCanvas, 0, 0)
+      context.globalAlpha = gradient.opacity
+      context.drawImage(scratch, 0, 0)
+    }
+  } else {
+    context.globalAlpha = gradient.opacity
+    clipToSelection(context, clip?.selection ?? null, manifest.value!.width, manifest.value!.height)
+    paintGradient(context, start, end, first, second, gradient.kind)
+  }
+  context.restore()
+  surface.dirty = { x: 0, y: 0, width: surface.width, height: surface.height }
+  modifiedSurfaces.add(assetKey(layer.id, paintTarget()))
+  if (paintTarget() === 'image' && !layer.imageFile) layer.imageFile = doc.imageFileName(layer.id)
+  endEdit()
+  schedulePaintFlush()
+}
+
+function paintGradient(
+  context: OffscreenCanvasRenderingContext2D,
+  start: [number, number],
+  end: [number, number],
+  first: { r: number; g: number; b: number },
+  second: { r: number; g: number; b: number },
+  kind: 'linear' | 'radial',
+): void {
+  const css = (colour: { r: number; g: number; b: number }) => `rgb(${colour.r},${colour.g},${colour.b})`
+  const shade =
+    kind === 'linear'
+      ? context.createLinearGradient(start[0], start[1], end[0], end[1])
+      : context.createRadialGradient(start[0], start[1], 0, start[0], start[1], Math.hypot(end[0] - start[0], end[1] - start[1]))
+  shade.addColorStop(0, css(first))
+  shade.addColorStop(1, css(second))
+  context.fillStyle = shade
+  context.fillRect(0, 0, context.canvas.width, context.canvas.height)
+}
+
+/** Draws a rectangle or an ellipse between the corners dragged. */
+export function drawShape(from: [number, number], to: [number, number], filled: boolean): void {
+  const layer = paintableLayer()
+  if (!layer) return
+  const surface = ensureSurface(layer, paintTarget())
+  const clip = currentSelectionClip(layer)
+  const a = documentToLayer(layer, from[0], from[1])
+  const b = documentToLayer(layer, to[0], to[1])
+  const scale = layerPixelScale(layer)
+  const width = Math.abs(b[0] - a[0])
+  const height = Math.abs(b[1] - a[1])
+  if (width < 1 || height < 1) return
+
+  history.begin('Shape', manifest.value!)
+  const context = surface.context
+  context.save()
+  applyClipForFill(context, clip)
+  context.fillStyle = `rgb(${foreground.r},${foreground.g},${foreground.b})`
+  context.strokeStyle = `rgb(${foreground.r},${foreground.g},${foreground.b})`
+  context.lineWidth = Math.max(1, shape.lineWidth * scale)
+  context.beginPath()
+  if (shape.kind === 'rectangle') {
+    context.rect(Math.min(a[0], b[0]), Math.min(a[1], b[1]), width, height)
+  } else {
+    context.ellipse(
+      (a[0] + b[0]) / 2,
+      (a[1] + b[1]) / 2,
+      width / 2,
+      height / 2,
+      0,
+      0,
+      Math.PI * 2,
+    )
+  }
+  if (filled) context.fill()
+  else context.stroke()
+  context.restore()
+  surface.dirty = { x: 0, y: 0, width: surface.width, height: surface.height }
+  modifiedSurfaces.add(assetKey(layer.id, paintTarget()))
+  if (paintTarget() === 'image' && !layer.imageFile) layer.imageFile = doc.imageFileName(layer.id)
+  endEdit()
+  schedulePaintFlush()
+}
+
+/** The clip for a whole-surface fill: a shape clips by path, a coverage mask by compositing. */
+function applyClipForFill(
+  context: OffscreenCanvasRenderingContext2D,
+  clip: import('../render/paint').SelectionClip | null,
+): void {
+  if (clip?.maskCanvas) return
+  if (clip) clipToSelection(context, clip.selection, clip.canvasWidth, clip.canvasHeight)
+}
+
+// MARK: - Compositing on the CPU
+
+/**
+ * The surfaces and placements a CPU composite needs, for the layers named.
+ *
+ * Only the layers that have pixels and a surface take part: a folder and an adjustment layer draw
+ * nothing of their own, though an adjustment's effect on what is below it cannot be reproduced
+ * here and is not attempted.
+ */
+function compositeLayersFor(ids: readonly string[]): CompositeLayer[] {
+  const current = manifest.value
+  if (!current) return []
+  const byId = indexLayers(current)
+  const out: CompositeLayer[] = []
+  for (const id of ids) {
+    const layer = byId.get(id)
+    if (!layer || isFolder(layer)) continue
+    const surface = paintStore.surface(id, 'image')
+    if (!surface) continue
+    out.push({
+      surface,
+      transform: layer.transform,
+      opacity: effectiveOpacity(layer, byId),
+      blendMode: blendModeOf(layer),
+      mask: paintStore.surface(id, 'mask') ?? null,
+    })
+  }
+  return out
+}
+
+/** The visible leaf layers, bottom to top, in the order the canvas draws them. */
+function visibleLayerIds(): string[] {
+  const current = manifest.value
+  if (!current) return []
+  return visibleLeaves(current.layers)
+    .filter((layer) => !isFolder(layer) && layer.adjustment === undefined)
+    .map((layer) => layer.id)
+}
+
+/** The document flattened on the CPU, for the operations that need pixels and have no GPU. */
+function flattenOnCpu(): OffscreenCanvas | null {
+  const current = manifest.value
+  if (!current) return null
+  const canvas = new OffscreenCanvas(current.width, current.height)
+  compositeInto(canvas, compositeLayersFor(visibleLayerIds()))
+  return canvas
+}
+
+function surfaceFromCanvas(layerId: string, canvas: OffscreenCanvas): LayerSurface | null {
+  const context = canvas.getContext('2d')
+  if (!context) return null
+  const image = context.getImageData(0, 0, canvas.width, canvas.height)
+  const target = new OffscreenCanvas(canvas.width, canvas.height)
+  const targetContext = target.getContext('2d')
+  if (!targetContext) return null
+  targetContext.putImageData(image, 0, 0)
+  paintStore.dispose(layerId, 'image')
+  return paintStore.createFromCanvas(layerId, target)
+}
+
+// MARK: - Merging
+
+/**
+ * Merges the selected layers into the topmost of them, or the active layer down onto the one below.
+ *
+ * The result is document-sized, which is what Photoshop produces too: a merged layer's bounds are
+ * the canvas, not the union of what went into it.
+ */
+function mergeInto(ids: readonly string[], name: string, label: string): void {
+  const current = manifest.value
+  if (!current || ids.length < 2) return
+  const byId = indexLayers(current)
+  const ordered = current.layers.filter((layer) => ids.includes(layer.id))
+  const top = ordered[ordered.length - 1]
+
+  const canvas = new OffscreenCanvas(current.width, current.height)
+  compositeInto(canvas, compositeLayersFor(ordered.map((layer) => layer.id)))
+
+  edit(label, (manifestNow) => {
+    const record = manifestNow.layers.find((item) => item.id === top.id)
+    if (!record) return false
+    // A merged layer keeps the top layer's identity so the stack position, mask and name survive.
+    record.transform = doc.covering(manifestNow.width, manifestNow.height)
+    record.imageFile = doc.imageFileName(record.id)
+    record.blendMode = 'Normal'
+    record.opacity = 1
+    delete record.maskSourceID
+    const doomed = new Set(ordered.slice(0, -1).map((layer) => layer.id))
+    manifestNow.layers = manifestNow.layers.filter((layer) => !doomed.has(layer.id))
+    for (const layer of manifestNow.layers) {
+      if (layer.maskSourceID && doomed.has(layer.maskSourceID)) delete layer.maskSourceID
+    }
+    return true
+  })
+
+  const surface = surfaceFromCanvas(top.id, canvas)
+  if (surface) {
+    surface.dirty = { x: 0, y: 0, width: surface.width, height: surface.height }
+  }
+  layerImages.set(top.id, { width: canvas.width, height: canvas.height })
+  modifiedSurfaces.add(assetKey(top.id, 'image'))
+  activeLayerId.value = top.id
+  selectedIds.value = [top.id]
+  schedulePaintFlush()
+  void byId
+  void name
+}
+
+export function mergeLayers(): void {
+  const ids = targetIds()
+  if (ids.length < 2) return
+  const top = manifest.value?.layers.filter((layer) => ids.includes(layer.id)).at(-1)
+  mergeInto(doc.topLevelSelection(manifest.value!, ids), top?.name ?? 'Merged', 'Merge Layers')
+}
+
+export function mergeDown(): void {
+  const current = manifest.value
+  const active = activeLayer.value
+  if (!current || !active || isFolder(active)) return
+  const parent = active.parentID ?? null
+  const siblings = current.layers.filter((layer) => (layer.parentID ?? null) === parent)
+  const at = siblings.findIndex((layer) => layer.id === active.id)
+  if (at <= 0) return
+  const below = siblings[at - 1]
+  if (isFolder(below)) return
+  mergeInto([below.id, active.id], active.name, 'Merge Down')
+}
+
+export const canMergeDown = computed(() => {
+  const current = manifest.value
+  const active = activeLayer.value
+  if (!current || !active || isFolder(active)) return false
+  const parent = active.parentID ?? null
+  const siblings = current.layers.filter((layer) => (layer.parentID ?? null) === parent)
+  const at = siblings.findIndex((layer) => layer.id === active.id)
+  return at > 0 && !isFolder(siblings[at - 1])
+})
+
+export const mergeTitle = computed(() => {
+  const count = targetIds().length
+  return count > 1 ? `Merge ${count} Layers` : 'Merge Down'
+})
+
+// MARK: - Copy Merged
+
+/** Puts the flattened document on the clipboard, as a picture. */
+export async function copyMerged(): Promise<void> {
+  await guard(async () => {
+    const canvas = flattenOnCpu()
+    if (!canvas) return
+    const blob = await canvas.convertToBlob({ type: 'image/png' })
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+    message.value = t('message.copied')
+  })
+}
+
+// MARK: - Exporting JPEG
+
+export async function exportJPEG(quality = 0.9): Promise<void> {
+  const target = compositor.value
+  if (!target) return
+  await guard(async () => {
+    const flat = await target.flatten()
+    if (!flat) return
+    const canvas = document.createElement('canvas')
+    canvas.width = flat.width
+    canvas.height = flat.height
+    const context = canvas.getContext('2d')
+    if (!context) return
+    // JPEG has no alpha, so the flattened image is laid on white first.
+    context.fillStyle = '#ffffff'
+    context.fillRect(0, 0, canvas.width, canvas.height)
+    context.putImageData(new ImageData(new Uint8ClampedArray(flat.data), flat.width, flat.height), 0, 0)
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality))
+    if (!blob) return
+    await (await backend()).exportFile(`${documentBaseName()}.jpg`, blob)
+  })
+}
+
+function documentBaseName(): string {
+  const path = project.value?.path
+  if (!path) return 'composite'
+  return (path.split(/[\\/]/).pop() ?? 'composite').replace(/\.comp$/i, '')
+}
+
+// MARK: - Canvas Size, Image Size, Trim and Crop
+
+/** Resamples a surface to a new size, in place. */
+function resampleSurface(surface: LayerSurface, width: number, height: number): void {
+  if (surface.width === width && surface.height === height) return
+  const source = surface.canvas
+  surface.canvas.width = Math.max(1, width)
+  surface.canvas.height = Math.max(1, height)
+  const context = surface.canvas.getContext('2d')
+  if (!context) return
+  context.imageSmoothingEnabled = true
+  context.imageSmoothingQuality = 'high'
+  context.drawImage(source, 0, 0, surface.width, surface.height)
+  surface.width = surface.canvas.width
+  surface.height = surface.canvas.height
+}
+
+/** Changes the canvas size, moving everything by the difference and keeping the anchors asked for. */
+export function resizeCanvas(width: number, height: number, anchor: 'topLeft' | 'center' | 'centerTop' = 'center'): void {
+  const current = manifest.value
+  if (!current) return
+  const dx = anchor === 'topLeft' ? 0 : Math.round((width - current.width) / 2)
+  const dy = anchor === 'center' ? Math.round((height - current.height) / 2) : anchor === 'centerTop' ? 0 : 0
+
+  edit('Canvas Size', (manifestNow) => {
+    if (manifestNow.width === width && manifestNow.height === height && dx === 0 && dy === 0) return false
+    manifestNow.width = width
+    manifestNow.height = height
+    for (const layer of manifestNow.layers) {
+      layer.transform.origin[0] += dx
+      layer.transform.origin[1] += dy
+      // A mask placed on its own moves with the canvas; a linked one follows its layer and has
+      // already moved.
+      if (layer.maskPlacement) {
+        layer.maskPlacement.origin[0] += dx
+        layer.maskPlacement.origin[1] += dy
+      }
+    }
+    for (const guide of manifestNow.guides ?? []) {
+      guide.position += guide.axis === 'vertical' ? dx : dy
+    }
+    return true
+  })
+  compositor.value?.setDocumentSize(width, height)
+  clearSelection()
+  fit()
+}
+
+/** Scales the whole document, pixels and all. */
+export function resizeImage(width: number, height: number): void {
+  const current = manifest.value
+  if (!current || width < 1 || height < 1) return
+  const scaleX = width / current.width
+  const scaleY = height / current.height
+
+  for (const layer of current.layers) {
+    layer.transform.origin[0] *= scaleX
+    layer.transform.origin[1] *= scaleY
+    layer.transform.size[0] *= scaleX
+    layer.transform.size[1] *= scaleY
+  }
+
+  for (const [surfaceId, surface] of paintStore.allSurfaces()) {
+    const [layerId] = surfaceId.split('|')
+    const layer = current.layers.find((item) => item.id === layerId)
+    if (!layer) continue
+    const nextWidth = Math.max(1, Math.round(surface.width * scaleX))
+    const nextHeight = Math.max(1, Math.round(surface.height * scaleY))
+    resampleSurface(surface, nextWidth, nextHeight)
+    if (!surfaceId.endsWith('|mask')) layerImages.set(layerId, { width: surface.width, height: surface.height })
+    surface.dirty = { x: 0, y: 0, width: surface.width, height: surface.height }
+    modifiedSurfaces.add(surfaceId)
+  }
+
+  edit('Image Size', (manifestNow) => {
+    manifestNow.width = width
+    manifestNow.height = height
+    return true
+  })
+  resizeCanvasPixels(width, height)
+  schedulePaintFlush()
+  fit()
+}
+
+function resizeCanvasPixels(width: number, height: number): void {
+  compositor.value?.setDocumentSize(width, height)
+  clearSelection()
+}
+
+/** Crops to the rectangle, in document coordinates. */
+export function cropTo(x: number, y: number, width: number, height: number): void {
+  const current = manifest.value
+  if (!current || width < 1 || height < 1) return
+  const left = Math.round(x)
+  const top = Math.round(y)
+  const w = Math.round(width)
+  const h = Math.round(height)
+
+  edit('Crop', (manifestNow) => {
+    manifestNow.width = w
+    manifestNow.height = h
+    for (const layer of manifestNow.layers) {
+      layer.transform.origin[0] -= left
+      layer.transform.origin[1] -= top
+      if (layer.maskPlacement) {
+        layer.maskPlacement.origin[0] -= left
+        layer.maskPlacement.origin[1] -= top
+      }
+    }
+    for (const guide of manifestNow.guides ?? []) {
+      guide.position -= guide.axis === 'vertical' ? left : top
+    }
+    return true
+  })
+  resizeCanvasPixels(w, h)
+  fit()
+}
+
+/** Crops away the transparent border: Photoshop's Trim. */
+export function trimTransparent(): boolean {
+  const current = manifest.value
+  const canvas = flattenOnCpu()
+  if (!current || !canvas) return false
+  const context = canvas.getContext('2d')
+  if (!context) return false
+  const { data, width, height } = context.getImageData(0, 0, canvas.width, canvas.height)
+  let minX = width
+  let minY = height
+  let maxX = -1
+  let maxY = -1
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (data[(y * width + x) * 4 + 3] === 0) continue
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (y < minY) minY = y
+      if (y > maxY) maxY = y
+    }
+  }
+  if (maxX < 0) return false
+  cropTo(minX, minY, maxX - minX + 1, maxY - minY + 1)
+  return true
+}
+
+// MARK: - Flipping the canvas
+
+export function flipCanvas(horizontally: boolean): void {
+  const current = manifest.value
+  if (!current) return
+  edit('Flip Canvas', (manifestNow) => {
+    for (const layer of manifestNow.layers) {
+      const transform = layer.transform
+      transform.flipX = horizontally ? !transform.flipX : transform.flipX
+      transform.flipY = horizontally ? transform.flipY : !transform.flipY
+      const [ox, oy] = transform.origin
+      const [w, h] = transform.size
+      if (horizontally) transform.origin[0] = manifestNow.width - ox - w
+      else transform.origin[1] = manifestNow.height - oy - h
+    }
+    return true
+  })
+}
+
+// MARK: - Mask operations
+
+function maskSurface(layerId: string): LayerSurface | null {
+  return paintStore.surface(layerId, 'mask') ?? null
+}
+
+/** Reads a mask surface as coverage. */
+function surfaceAsMask(surface: LayerSurface): Mask {
+  const image = surface.context.getImageData(0, 0, surface.width, surface.height)
+  const mask: Mask = { width: surface.width, height: surface.height, data: new Uint8Array(surface.width * surface.height) }
+  for (let index = 0; index < mask.data.length; index += 1) mask.data[index] = image.data[index * 4]
+  return mask
+}
+
+function writeMaskSurface(surface: LayerSurface, mask: Mask): void {
+  const image = surface.context.createImageData(mask.width, mask.height)
+  for (let index = 0; index < mask.data.length; index += 1) {
+    image.data[index * 4] = mask.data[index]
+    image.data[index * 4 + 1] = mask.data[index]
+    image.data[index * 4 + 2] = mask.data[index]
+    image.data[index * 4 + 3] = 255
+  }
+  surface.context.putImageData(image, 0, 0)
+  surface.dirty = { x: 0, y: 0, width: surface.width, height: surface.height }
+}
+
+/** Invert, blur or feather a layer's mask, in one undo step. */
+export function editLayerMask(action: 'invert' | 'blur' | 'feather', amount = 5): void {
+  const layer = paintableLayer()
+  if (!layer?.maskFile) return
+  const surface = maskSurface(layer.id)
+  if (!surface) return
+  const label = action === 'invert' ? 'Invert Mask' : action === 'blur' ? 'Blur Mask' : 'Feather Mask'
+  edit(label, () => {
+    const mask = surfaceAsMask(surface)
+    writeMaskSurface(surface, action === 'invert' ? invertMask(mask) : blurMask(mask, amount / 2))
+    return true
+  })
+  modifiedSurfaces.add(assetKey(layer.id, 'mask'))
+  schedulePaintFlush()
+}
+
 // MARK: - Selections
 
+/**
+ * Replaces the selection, and rebuilds the coverage canvas the brush and the fill read.
+ *
+ * Every path that changes the selection comes through here, which is why combining modes and
+ * keeping the canvas in step are one thing rather than two.
+ */
 export function setSelection(next: Selection | null): void {
   selection.value = next
   selectionMaskCanvas.value = next?.mask ? maskToCanvas(next.mask) : null
+}
+
+/**
+ * Adds a freshly drawn selection to the one already there, in the current mode.
+ *
+ * A shape is rasterised first, because combining coverage is the only operation that means
+ * anything across the four modes — "subtract" has no meaning for two rectangles without one.
+ */
+export function applySelectionMode(next: Selection | null): void {
+  const mode = selectionMode.value
+  const manifestNow = manifest.value
+  if (!manifestNow) {
+    setSelection(next)
+    return
+  }
+  if (mode === 'new') {
+    setSelection(next)
+    return
+  }
+  if (!next) return
+  const incoming = next.mask ?? maskFromShapeOf(next, manifestNow.width, manifestNow.height)
+  const base = selection.value?.mask ?? (selection.value ? maskFromShapeOf(selection.value, manifestNow.width, manifestNow.height) : null)
+  setSelection(maskSelection(combineMasks(base, incoming, mode)))
+}
+
+function maskFromShapeOf(shape: Selection, width: number, height: number): Mask {
+  const kind = shape.kind === 'mask' ? 'rectangle' : shape.kind
+  const mask = maskFromShape(
+    { kind, bounds: { x: shape.x, y: shape.y, width: shape.width, height: shape.height }, points: shape.points },
+    width,
+    height,
+  )
+  return shape.inverted ? invertMask(mask) : mask
+}
+
+/** Select -> All, then the coverage canvas follows. */
+export function selectAllMasK(): void {
+  selectAll()
 }
 
 /** The coverage as an image whose alpha is the selection. */
@@ -1195,10 +1902,15 @@ export async function magicWandAt(x: number, y: number, tolerance: number, conti
   })
 }
 
+function clearSelection(): void {
+  setSelection(null)
+}
+
 export function selectAll(): void {
   const current = manifest.value
   if (!current) return
   setSelection(fullSelection(current.width, current.height))
+  selectionMaskCanvas.value = null
 }
 
 export function deselect(): void {
@@ -1307,6 +2019,19 @@ export function setLayerOrigin(id: string, x: number, y: number): void {
     if (!layer) return
     layer.transform.origin[0] = x
     layer.transform.origin[1] = y
+  })
+}
+
+/** Moves the active layer by whole pixels; the arrow keys in Photoshop's amount. */
+export function nudgeActive(dx: number, dy: number): void {
+  const id = activeLayerId.value
+  if (!id) return
+  edit('Nudge Layer', (current) => {
+    const layer = current.layers.find((record) => record.id === id)
+    if (!layer) return false
+    layer.transform.origin[0] += dx
+    layer.transform.origin[1] += dy
+    return true
   })
 }
 
@@ -1578,6 +2303,16 @@ if (typeof window !== 'undefined') {
       },
       selectTool,
       setForeground,
+      nudgeActive,
+      mergeDown,
+      mergeLayers,
+      resizeCanvas,
+      resizeImage,
+      cropTo,
+      trimTransparent,
+      flipCanvas,
+      editLayerMask,
+      applyCrop,
       addLayerMask,
       removeLayerMask,
       setMaskEditing,

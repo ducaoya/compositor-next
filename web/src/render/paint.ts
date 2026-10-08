@@ -11,7 +11,9 @@
  * Coordinates here are always **layer pixels**, never document pixels. The caller maps.
  */
 
+import { blendRgb } from '../model/blend'
 import { clipToSelection, type Selection } from '../model/selection'
+import type { BlendModeName, Transform } from '../model/types'
 import { encodeGrayscalePng, grayscaleFromRgba } from './png'
 
 export interface BrushSettings {
@@ -122,6 +124,26 @@ export class PaintStore {
 
   clear(): void {
     this.surfaces.clear()
+  }
+
+  /** Every surface, with its key, for the operations that touch all of them. */
+  allSurfaces(): [string, LayerSurface][] {
+    return [...this.surfaces]
+  }
+
+  /** Adopts a canvas that already holds the pixels, for a merge. */
+  createFromCanvas(layerId: string, canvas: OffscreenCanvas, kind: SurfaceKind = 'image'): LayerSurface | null {
+    const context = canvas.getContext('2d')
+    if (!context) return null
+    const surface: LayerSurface = {
+      canvas,
+      context,
+      width: canvas.width,
+      height: canvas.height,
+      dirty: null,
+    }
+    this.surfaces.set(surfaceKey(layerId, kind), surface)
+    return surface
   }
 
   /** Every surface whose pixels have changed since it was last uploaded, with its key. */
@@ -344,6 +366,145 @@ export function stampSegment(
     dirty = unionRect(dirty, stampDab(surface, x, y, radius, settings, erasing, clip))
   }
   return dirty
+}
+
+/** One layer as the CPU compositor needs it. */
+export interface CompositeLayer {
+  surface: LayerSurface
+  transform: Transform
+  /** Already multiplied through every enclosing folder. */
+  opacity: number
+  blendMode: BlendModeName
+  mask?: LayerSurface | null
+}
+
+/**
+ * The blend modes Canvas2D composites natively, and in sRGB, which is the space Photoshop blends
+ * in — so drawing with `globalCompositeOperation` is not an approximation, it is the same
+ * operation.
+ */
+const CANVAS_BLEND: Partial<Record<BlendModeName, GlobalCompositeOperation>> = {
+  Normal: 'source-over',
+  Multiply: 'multiply',
+  Screen: 'screen',
+  Overlay: 'overlay',
+  Darken: 'darken',
+  Lighten: 'lighten',
+  'Color Dodge': 'color-dodge',
+  'Color Burn': 'color-burn',
+  'Hard Light': 'hard-light',
+  'Soft Light': 'soft-light',
+  Difference: 'difference',
+  Exclusion: 'exclusion',
+  Hue: 'hue',
+  Saturation: 'saturation',
+  Color: 'color',
+  Luminosity: 'luminosity',
+}
+
+/** The eight Canvas2D has no operation for, which are composited a pixel at a time instead. */
+export function needsPixelLoop(mode: BlendModeName): boolean {
+  return !(mode in CANVAS_BLEND)
+}
+
+function place(
+  context: OffscreenCanvasRenderingContext2D,
+  layer: CompositeLayer,
+  width: number,
+  height: number,
+): void {
+  const [w, h] = layer.transform.size
+  const [ox, oy] = layer.transform.origin
+  context.setTransform(new DOMMatrix())
+  context.translate(ox + w / 2, oy + h / 2)
+  context.rotate(layer.transform.rotation)
+  context.scale(layer.transform.flipX ? -1 : 1, layer.transform.flipY ? -1 : 1)
+  context.drawImage(layer.surface.canvas, -w / 2, -h / 2, w, h)
+  void width
+  void height
+}
+
+/**
+ * Composites layers onto a canvas, bottom to top.
+ *
+ * Used wherever the answer is a raster rather than a frame: merging layers, Copy Merged, and the
+ * resize operations, which all need pixels and have no GPU to ask. Each layer is drawn onto a
+ * scratch through its transform and its mask, then laid on with its blend mode — so a rotated,
+ * masked, half-transparent layer merges exactly as it looks.
+ */
+export function compositeInto(
+  target: OffscreenCanvas,
+  layers: readonly CompositeLayer[],
+): void {
+  const width = target.width
+  const height = target.height
+  const context = target.getContext('2d')
+  if (!context) return
+
+  for (const layer of layers) {
+    if (layer.opacity <= 0) continue
+    const scratch = new OffscreenCanvas(width, height)
+    const scratchContext = scratch.getContext('2d')
+    if (!scratchContext) continue
+    place(scratchContext, layer, width, height)
+    if (layer.mask) {
+      // The mask covers the layer's own pixels, so it goes on through the same placement.
+      scratchContext.setTransform(new DOMMatrix())
+      scratchContext.globalCompositeOperation = 'destination-in'
+      scratchContext.translate(
+        layer.transform.origin[0] + layer.transform.size[0] / 2,
+        layer.transform.origin[1] + layer.transform.size[1] / 2,
+      )
+      scratchContext.rotate(layer.transform.rotation)
+      scratchContext.scale(layer.transform.flipX ? -1 : 1, layer.transform.flipY ? -1 : 1)
+      scratchContext.drawImage(
+        layer.mask.canvas,
+        -layer.transform.size[0] / 2,
+        -layer.transform.size[1] / 2,
+        layer.transform.size[0],
+        layer.transform.size[1],
+      )
+    }
+    scratchContext.setTransform(new DOMMatrix())
+    scratchContext.globalCompositeOperation = 'source-over'
+
+    const native = CANVAS_BLEND[layer.blendMode]
+    context.setTransform(new DOMMatrix())
+    context.globalAlpha = layer.opacity
+    if (native) {
+      context.globalCompositeOperation = native
+      context.drawImage(scratch, 0, 0)
+      continue
+    }
+    // The modes Canvas2D has no operation for: Linear Burn and Dodge, Vivid and Linear and Pin
+    // Light, Hard Mix, Subtract and Divide. Slower, and only for those.
+    const below = context.getImageData(0, 0, width, height)
+    const above = scratchContext.getImageData(0, 0, width, height)
+    const out = below.data
+    for (let index = 0; index < out.length; index += 4) {
+      const as = (above.data[index + 3] / 255) * layer.opacity
+      if (as <= 0) continue
+      const ab = out[index + 3] / 255
+      const cs: [number, number, number] = [above.data[index] / 255, above.data[index + 1] / 255, above.data[index + 2] / 255]
+      const cb: [number, number, number] =
+        ab > 0 ? [out[index] / 255, out[index + 1] / 255, out[index + 2] / 255] : [0, 0, 0]
+      const blended = blendRgb(layer.blendMode, cb, cs)
+      const ao = as + ab * (1 - as)
+      if (ao <= 0) {
+        out[index + 3] = 0
+        continue
+      }
+      for (let channel = 0; channel < 3; channel += 1) {
+        const co = as * (1 - ab) * cs[channel] + as * ab * blended[channel] + (1 - as) * ab * cb[channel]
+        out[index + channel] = Math.round(Math.min(1, Math.max(0, co / ao)) * 255)
+      }
+      out[index + 3] = Math.round(Math.min(1, ao) * 255)
+    }
+    context.globalCompositeOperation = 'source-over'
+    context.putImageData(below, 0, 0)
+  }
+  context.globalAlpha = 1
+  context.globalCompositeOperation = 'source-over'
 }
 
 /** Floods the whole layer with a colour, or clears it, limited to the selection. */

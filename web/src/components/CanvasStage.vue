@@ -26,12 +26,17 @@ import {
   endStroke,
   extendStroke,
   fit,
+  applyCrop,
+  applySelectionMode,
+  drawGradient,
+  drawShape,
   flushPaint,
   importDroppedFiles,
   layerMatrix,
   layerPixelSize,
   marqueeSelection,
   panBy,
+  setCropRect,
   pickColor,
   registerDropTarget,
   selectLayer,
@@ -55,6 +60,9 @@ const {
   tool,
   brush,
   selection,
+  cropRect,
+
+  shape,
   wandTolerance,
   wandContiguous,
 } = useSession()
@@ -64,6 +72,8 @@ const canvas = ref<HTMLCanvasElement | null>(null)
 const pointer = ref<[number, number] | null>(null)
 const dragGuides = ref<{ x: number[]; y: number[] }>({ x: [], y: [] })
 const dropActive = ref(false)
+/** The line a gradient or shape tool is dragging, for the preview it draws. */
+const previewDrag = ref<{ kind: string; from: [number, number]; to: [number, number] } | null>(null)
 const trace = { mounts: 0, schedules: 0, renders: 0, skipped: [] as string[], errors: [] as string[] }
 if (typeof window !== 'undefined') {
   Object.defineProperty(window, '__stageTrace', { value: trace, configurable: true })
@@ -79,6 +89,9 @@ type Drag =
   | { kind: 'pan'; lastX: number; lastY: number }
   | { kind: 'marquee'; start: [number, number]; current: [number, number]; elliptical: boolean }
   | { kind: 'lasso'; points: [number, number][] }
+  | { kind: 'crop'; start: [number, number]; current: [number, number] }
+  | { kind: 'gradient'; start: [number, number]; current: [number, number] }
+  | { kind: 'shape'; start: [number, number]; current: [number, number] }
   | { kind: 'paint' }
   | { kind: 'move'; layerId: string; startOrigin: [number, number]; startPointer: [number, number] }
   | {
@@ -320,6 +333,18 @@ function onPointerDown(event: PointerEvent): void {
       setSelection(null)
       return
     }
+    case 'crop': {
+      // A press inside the rectangle that is already there starts a new one, as Photoshop's
+      // crop tool does.
+      drag = { kind: 'crop', start: [dx, dy], current: [dx, dy] }
+      setCropRect({ x: dx, y: dy, width: 0, height: 0 })
+      return
+    }
+    case 'gradient':
+    case 'shape': {
+      drag = { kind: tool.value === 'gradient' ? 'gradient' : 'shape', start: [dx, dy], current: [dx, dy] }
+      return
+    }
     case 'brush':
     case 'eraser':
       drag = { kind: 'paint' }
@@ -399,11 +424,27 @@ function onPointerMove(event: PointerEvent): void {
       return
     case 'marquee':
       dragging.current = [dx, dy]
+      // The mode is applied once, when the drag ends: applying it per move would combine the
+      // half-drawn shape over and over with itself.
       setSelection(marqueeSelection(dragging.start, dragging.current, dragging.elliptical))
       return
     case 'lasso':
       dragging.points.push([dx, dy])
       setSelection(polygonSelection(dragging.points))
+      return
+    case 'gradient':
+    case 'shape':
+      dragging.current = [dx, dy]
+      previewDrag.value = { kind: dragging.kind, from: dragging.start, to: dragging.current }
+      return
+    case 'crop':
+      dragging.current = [dx, dy]
+      setCropRect({
+        x: Math.min(dragging.start[0], dx),
+        y: Math.min(dragging.start[1], dy),
+        width: Math.abs(dx - dragging.start[0]),
+        height: Math.abs(dy - dragging.start[1]),
+      })
       return
     case 'paint':
       extendStroke(dx, dy)
@@ -514,11 +555,27 @@ function onPointerUp(event: PointerEvent): void {
     case 'paint':
       endStroke()
       break
-    case 'marquee':
-      if (!marqueeSelection(drag.start, drag.current, drag.elliptical)) setSelection(null)
+    case 'marquee': {
+      const drawn = marqueeSelection(drag.start, drag.current, drag.elliptical)
+      applySelectionMode(drawn)
       break
+    }
     case 'lasso':
-      setSelection(polygonSelection(drag.points))
+      applySelectionMode(polygonSelection(drag.points))
+      break
+    case 'crop': {
+      const rect = cropRect.value
+      // A crop smaller than a few pixels is a stray click, not a crop.
+      if (!rect || rect.width < 4 || rect.height < 4) setCropRect(null)
+      break
+    }
+    case 'gradient':
+      previewDrag.value = null
+      drawGradient(drag.start, drag.current)
+      break
+    case 'shape':
+      previewDrag.value = null
+      drawShape(drag.start, drag.current, shape.filled)
       break
     case 'move':
       dragGuides.value = { x: [], y: [] }
@@ -577,6 +634,7 @@ function onKeyDown(event: KeyboardEvent): void {
     setSelection(null)
     drag = { kind: 'none' }
   }
+  if (event.key === 'Enter' && cropRect.value && tool.value === 'crop') applyCrop()
 }
 
 function onKeyUp(event: KeyboardEvent): void {
@@ -654,6 +712,30 @@ watch(
       <g class="ants">
         <path v-if="selection" class="ants__under" :transform="`translate(${view.panX} ${view.panY}) scale(${view.zoom})`" :d="selectionOutline(selection, manifest?.width ?? 0, manifest?.height ?? 0)" />
         <path v-if="selection" class="ants__over" :transform="`translate(${view.panX} ${view.panY}) scale(${view.zoom})`" :d="selectionOutline(selection, manifest?.width ?? 0, manifest?.height ?? 0)" />
+      </g>
+      <line
+        v-if="previewDrag"
+        class="drag-line"
+        :x1="previewDrag.from[0] * view.zoom + view.panX"
+        :y1="previewDrag.from[1] * view.zoom + view.panY"
+        :x2="previewDrag.to[0] * view.zoom + view.panX"
+        :y2="previewDrag.to[1] * view.zoom + view.panY"
+      />
+      <g v-if="cropRect">
+        <path
+          class="crop__shade"
+          :d="`M0 0H${viewport.width / viewport.dpr}V${viewport.height / viewport.dpr}H0Z ` +
+            `M${cropRect.x * view.zoom + view.panX} ${cropRect.y * view.zoom + view.panY}` +
+            `h${cropRect.width * view.zoom}v${cropRect.height * view.zoom}h${-cropRect.width * view.zoom}Z`"
+          fill-rule="evenodd"
+        />
+        <rect
+          class="crop__frame"
+          :x="cropRect.x * view.zoom + view.panX"
+          :y="cropRect.y * view.zoom + view.panY"
+          :width="cropRect.width * view.zoom"
+          :height="cropRect.height * view.zoom"
+        />
       </g>
       <polygon v-if="transformBox" class="frame" :points="transformBox" />
       <circle
@@ -751,6 +833,24 @@ watch(
   to {
     stroke-dashoffset: -8;
   }
+}
+
+.drag-line {
+  stroke: #ffffff;
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.crop__shade {
+  fill: rgb(0 0 0 / 55%);
+}
+
+.crop__frame {
+  fill: none;
+  stroke: #ffffff;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
 }
 
 .handle {

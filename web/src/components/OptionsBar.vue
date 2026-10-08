@@ -13,7 +13,8 @@ import { TOOLS_BY_ID } from '../model/tools'
 import { fit, importImages, useSession, zoomTo } from '../state/session'
 
 const { t } = useI18n()
-const { tool, brush, foreground, selection, wandTolerance, wandContiguous } = useSession()
+const { tool, brush, foreground, selection, wandTolerance, wandContiguous, selectionMode, gradient, shape } =
+  useSession()
 
 const label = computed(() => {
   const definition = TOOLS_BY_ID.get(tool.value)
@@ -36,6 +37,13 @@ const isMarquee = computed(
   () => tool.value === 'marqueeRect' || tool.value === 'marqueeEllipse' || tool.value === 'lasso',
 )
 const isZoomLike = computed(() => tool.value === 'zoom' || tool.value === 'hand')
+
+const MODES = [
+  { id: 'new' as const, key: 'options.modeNew', glyph: '▢' },
+  { id: 'add' as const, key: 'options.modeAdd', glyph: '▣' },
+  { id: 'subtract' as const, key: 'options.modeSubtract', glyph: '▤' },
+  { id: 'intersect' as const, key: 'options.modeIntersect', glyph: '▥' },
+]
 </script>
 
 <template>
@@ -54,10 +62,16 @@ const isZoomLike = computed(() => tool.value === 'zoom' || tool.value === 'hand'
     <!-- Marquee -->
     <template v-else-if="isMarquee">
       <div class="options__modes">
-        <button class="options__mode" :class="{ 'options__mode--on': true }" :title="t('options.newSelection')">▢</button>
-        <button class="options__mode" disabled :title="t('options.addSelection')">▢</button>
-        <button class="options__mode" disabled :title="t('options.subtractSelection')">▢</button>
-        <button class="options__mode" disabled :title="t('options.intersectSelection')">▢</button>
+        <button
+          v-for="entry in MODES"
+          :key="entry.id"
+          class="options__mode"
+          :class="{ 'options__mode--on': selectionMode === entry.id }"
+          :title="t(entry.key)"
+          @click="selectionMode = entry.id"
+        >
+          {{ entry.glyph }}
+        </button>
       </div>
       <label class="options__number">
         {{ t('options.feather') }} <input type="number" value="0" disabled /> {{ t('common.px') }}
@@ -100,6 +114,38 @@ const isZoomLike = computed(() => tool.value === 'zoom' || tool.value === 'hand'
       </label>
       <label class="options__select">
         <select disabled><option>{{ t('options.sampleAllLayers') }}</option></select>
+      </label>
+    </template>
+
+    <!-- Gradient -->
+    <template v-else-if="tool === 'gradient'">
+      <label class="options__select">
+        {{ t('options.gradientKind') }}
+        <select v-model="gradient.kind">
+          <option value="linear">{{ t('options.gradientLinear') }}</option>
+          <option value="radial">{{ t('options.gradientRadial') }}</option>
+        </select>
+      </label>
+      <label class="options__check"><input v-model="gradient.reverse" type="checkbox" /> {{ t('options.reverse') }}</label>
+      <label class="options__number">
+        {{ t('options.opacity') }} <input v-model.number="gradient.opacity" type="number" min="0" max="1" step="0.05" />
+      </label>
+    </template>
+
+    <!-- Shape -->
+    <template v-else-if="tool === 'shape'">
+      <label class="options__select">
+        {{ t('options.shapeKind') }}
+        <select v-model="shape.kind">
+          <option value="rectangle">{{ t('options.shapeRectangle') }}</option>
+          <option value="ellipse">{{ t('options.shapeEllipse') }}</option>
+        </select>
+      </label>
+      <label class="options__check">
+        <input v-model="shape.filled" type="checkbox" /> {{ shape.filled ? t('options.fill') : t('options.stroke') }}
+      </label>
+      <label v-if="!shape.filled" class="options__number">
+        {{ t('options.size') }} <input v-model.number="shape.lineWidth" type="number" min="1" max="200" />
       </label>
     </template>
 

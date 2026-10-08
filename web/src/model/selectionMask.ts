@@ -338,3 +338,46 @@ export function magicWandMask(
   }
   return mask
 }
+
+
+/** How a new selection joins the one already there: Photoshop's four marquee modes. */
+export type SelectionMode = 'new' | 'add' | 'subtract' | 'intersect'
+
+/**
+ * Combines two selections by coverage.
+ *
+ * Addition is the maximum of the two, intersection the minimum, and subtraction the first scaled
+ * back by the second — the three operations that make sense on coverage, and the three Photoshop
+ * offers. Everything is byte-wise and clamped, so a soft edge meets a soft edge softly.
+ */
+export function combineMasks(base: Mask | null, next: Mask, mode: SelectionMode): Mask {
+  if (mode === 'new' || !base || base.width !== next.width || base.height !== next.height) {
+    return cloneMask(next)
+  }
+  const out = sameSize(next)
+  for (let index = 0; index < next.data.length; index += 1) {
+    const a = base.data[index]
+    const b = next.data[index]
+    out.data[index] =
+      mode === 'add'
+        ? Math.max(a, b)
+        : mode === 'intersect'
+          ? Math.min(a, b)
+          : Math.round(a * (1 - b / 255))
+  }
+  return out
+}
+
+/** A selection from a layer's own coverage: its alpha, thresholded. */
+export function maskFromAlpha(
+  rgba: Uint8ClampedArray,
+  width: number,
+  height: number,
+  threshold = 128,
+): Mask {
+  const mask = createMask(width, height)
+  for (let index = 0; index < width * height; index += 1) {
+    mask.data[index] = rgba[index * 4 + 3] >= threshold ? 255 : 0
+  }
+  return mask
+}

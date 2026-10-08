@@ -52,7 +52,14 @@
     "about": "关于 Compositor",
     "installLanguagePack": "安装语言包…",
     "openLanguageFolder": "打开语言包文件夹",
-    "reloadLanguages": "重新载入语言包"
+    "reloadLanguages": "重新载入语言包",
+    "exportJpeg": "导出 JPEG…",
+    "copyMerged": "拷贝合并内容",
+    "flipCanvasH": "水平翻转画布",
+    "flipCanvasV": "垂直翻转画布",
+    "invertMask": "反相蒙版",
+    "blurMask": "模糊蒙版",
+    "featherMask": "羽化蒙版"
   },
   "tools": {
     "move": "移动",
@@ -105,7 +112,21 @@
     "brushTip": "{size} 像素笔尖",
     "tolerance": "容差：",
     "contiguous": "连续",
-    "sampleAllLayers": "对所有图层取样"
+    "sampleAllLayers": "对所有图层取样",
+    "mode": "模式",
+    "modeNew": "新选区",
+    "modeAdd": "添加",
+    "modeSubtract": "减去",
+    "modeIntersect": "交叉",
+    "gradientKind": "类型：",
+    "gradientLinear": "线性",
+    "gradientRadial": "径向",
+    "reverse": "反向",
+    "shapeKind": "形状：",
+    "shapeRectangle": "矩形",
+    "shapeEllipse": "椭圆",
+    "fill": "填充",
+    "stroke": "描边"
   },
   "layers": {
     "title": "图层",
@@ -208,7 +229,9 @@
     "browserPreview": "这是浏览器预览：无法写入磁盘。",
     "saved": "已存储",
     "imageUnreadable": "无法将 {name} 作为图像读取。",
-    "packInstalled": "“{name}”已安装。"
+    "packInstalled": "“{name}”已安装。",
+    "copied": "已复制到剪贴板",
+    "selectionEmpty": "该图层没有可选择的像素。"
   },
   "error": {
     "invalid": "这不是有效的 Compositor 工程，或其中的元数据已损坏。",
@@ -371,6 +394,25 @@
     "nothingSelected": "当前没有选区。",
     "featherNote": "以此像素数柔化选区边缘。",
     "expandNote": "将选区向外扩展此像素数。",
-    "contractNote": "将选区向内收缩此像素数。"
+    "contractNote": "将选区向内收缩此像素数。",
+    "loadPixels": "图层像素",
+    "loadMask": "蒙版非选区"
+  },
+  "size": {
+    "canvasTitle": "画布大小",
+    "imageTitle": "图像大小",
+    "anchor": "定位",
+    "anchorCenter": "中间",
+    "anchorCenterTop": "中上",
+    "anchorTopLeft": "左上",
+    "canvasNote": "只移动内容，不改变像素。",
+    "imageNote": "重新采样所有图层。",
+    "invalid": "宽度和高度必须是整数像素。",
+    "tooLarge": "每边最大为 {maxSide} 像素。"
+  },
+  "crop": {
+    "apply": "应用",
+    "cancel": "取消",
+    "hint": "拖出一个矩形，然后按回车。"
   }
 }

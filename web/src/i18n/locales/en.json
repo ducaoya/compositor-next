@@ -52,7 +52,14 @@
     "about": "About Compositor",
     "installLanguagePack": "Install Language Pack…",
     "openLanguageFolder": "Open Language Folder",
-    "reloadLanguages": "Reload Language Packs"
+    "reloadLanguages": "Reload Language Packs",
+    "exportJpeg": "Export JPEG…",
+    "copyMerged": "Copy Merged",
+    "flipCanvasH": "Flip Canvas Horizontal",
+    "flipCanvasV": "Flip Canvas Vertical",
+    "invertMask": "Invert Mask",
+    "blurMask": "Blur Mask",
+    "featherMask": "Feather Mask"
   },
   "tools": {
     "move": "Move",
@@ -105,7 +112,21 @@
     "brushTip": "{size} px tip",
     "tolerance": "Tolerance:",
     "contiguous": "Contiguous",
-    "sampleAllLayers": "Sample All Layers"
+    "sampleAllLayers": "Sample All Layers",
+    "mode": "Mode",
+    "modeNew": "New",
+    "modeAdd": "Add",
+    "modeSubtract": "Subtract",
+    "modeIntersect": "Intersect",
+    "gradientKind": "Type:",
+    "gradientLinear": "Linear",
+    "gradientRadial": "Radial",
+    "reverse": "Reverse",
+    "shapeKind": "Shape:",
+    "shapeRectangle": "Rectangle",
+    "shapeEllipse": "Ellipse",
+    "fill": "Fill",
+    "stroke": "Stroke"
   },
   "layers": {
     "title": "Layers",
@@ -208,7 +229,9 @@
     "browserPreview": "This is a browser preview: nothing can be written to disk.",
     "saved": "Saved",
     "imageUnreadable": "{name} could not be read as an image.",
-    "packInstalled": "“{name}” was installed."
+    "packInstalled": "“{name}” was installed.",
+    "copied": "Copied to the clipboard",
+    "selectionEmpty": "That layer has no pixels to select."
   },
   "error": {
     "invalid": "This is not a valid Compositor project, or its metadata is damaged.",
@@ -371,6 +394,25 @@
     "nothingSelected": "Nothing is selected.",
     "featherNote": "Softens the edge over this many pixels.",
     "expandNote": "Grows the selection outward by this many pixels.",
-    "contractNote": "Shrinks the selection inward by this many pixels."
+    "contractNote": "Shrinks the selection inward by this many pixels.",
+    "loadPixels": "Layer's Pixels",
+    "loadMask": "Mask's Black Areas"
+  },
+  "size": {
+    "canvasTitle": "Canvas Size",
+    "imageTitle": "Image Size",
+    "anchor": "Anchor",
+    "anchorCenter": "Centre",
+    "anchorCenterTop": "Centre top",
+    "anchorTopLeft": "Top left",
+    "canvasNote": "Moves everything and leaves the pixels alone.",
+    "imageNote": "Resamples every layer. This cannot be undone in place once saved.",
+    "invalid": "Width and height must be whole numbers of pixels.",
+    "tooLarge": "Both sides must be at most {maxSide} pixels."
+  },
+  "crop": {
+    "apply": "Apply",
+    "cancel": "Cancel",
+    "hint": "Drag a rectangle, then press Enter."
   }
 }
