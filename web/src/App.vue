@@ -20,6 +20,7 @@ import EffectsSheet from './components/EffectsSheet.vue'
 import FilterSheet from './components/FilterSheet.vue'
 import SelectionAmountSheet from './components/SelectionAmountSheet.vue'
 import OptionsBar from './components/OptionsBar.vue'
+import RecoverySheet from './components/RecoverySheet.vue'
 import PropertiesPanel from './components/PropertiesPanel.vue'
 import StatusBar from './components/StatusBar.vue'
 import ToolRail from './components/ToolRail.vue'
@@ -49,6 +50,12 @@ import {
   openEffectsSheet,
   openFilterSheet,
   checkForUpdates,
+  checkForRecovery,
+  installUpdate,
+  listenForProjectOpen,
+  openStartupProject,
+  startAutosave,
+  stopAutosave,
   invertSelection,
   loadLanguagePacks,
   moveActive,
@@ -95,6 +102,9 @@ const {
   gridSpacing,
   gridSubdivisions,
   setGrid,
+  updateAvailable,
+  updatePercent,
+  updatePhase,
 } = useSession()
 
 interface MenuItem {
@@ -279,6 +289,11 @@ const menus = computed<Menu[]>(() => [
     label: t('menu.help'),
     items: [
       { label: t('menu.checkUpdates'), run: () => void checkForUpdates() },
+      {
+        label: t('menu.installUpdate'),
+        run: () => void installUpdate(),
+        enabled: () => updateAvailable.value !== null,
+      },
       { label: t('menu.about'), enabled: () => false },
     ],
   },
@@ -302,6 +317,13 @@ const commands = computed<Command[]>(() =>
       })),
   ),
 )
+
+/** What an install is doing, for the one line in the menu bar. */
+const updateStatus = computed(() => {
+  if (updatePhase.value === 'installing') return t('update.installing')
+  const percent = updatePercent.value
+  return percent === null ? t('update.downloadingUnknown') : t('update.downloading', { percent })
+})
 
 /** Whether the shell can reach the filesystem, which decides if a folder can be opened. */
 /** How many layers an operation would apply to, which decides what the merge item says. */
@@ -420,10 +442,19 @@ function onKeyDown(event: KeyboardEvent): void {
 
 onMounted(() => {
   void loadLanguagePacks()
+  // Work the last run never saved, and the project a double-click named, if there was one. Both
+  // ask the shell, so both are no-ops in a browser preview.
+  void checkForRecovery()
+  void openStartupProject()
+  void listenForProjectOpen()
+  startAutosave()
   window.addEventListener('keydown', onKeyDown)
   window.addEventListener('click', () => (openMenu.value = null), { capture: false })
 })
-onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown))
+onBeforeUnmount(() => {
+  stopAutosave()
+  window.removeEventListener('keydown', onKeyDown)
+})
 </script>
 
 <template>
@@ -460,7 +491,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown))
         </div>
       </div>
       <span class="menubar__spacer" />
-      <span v-if="busy" class="menubar__busy">{{ t('common.working') }}</span>
+      <span v-if="updatePhase !== 'idle'" class="menubar__busy">{{ updateStatus }}</span>
+      <span v-else-if="busy" class="menubar__busy">{{ t('common.working') }}</span>
     </nav>
 
     <OptionsBar />
@@ -487,6 +519,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown))
     <DimensionSheet />
     <EffectsSheet />
     <FilterSheet />
+    <RecoverySheet />
     <CommandPalette :commands="commands" />
   </div>
 </template>

@@ -80,6 +80,7 @@ describe('the message tables', () => {
       'error.tooLarge',
       'error.encode',
       'error.notFound',
+      'error.notASnapshot',
       'error.io',
       'error.json',
       'error.saveEnded',

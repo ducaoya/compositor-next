@@ -39,6 +39,15 @@ either editor opens in the other.
 - **Hue/Saturation's colour-range bands** — the six ranges Photoshop has, each with its own hue,
   saturation and lightness and its own band edges.
 - **Undo throughout, one step per gesture.**
+- **Nothing unsaved is lost to a crash.** While a document has changes that are not on disk it is
+  snapshotted into the app's data folder — once the editing has stopped, and at most once every
+  thirty seconds — and the next start offers whatever it finds. Saving a recovered document writes
+  back to the project it came from, never into the recovery folder.
+- **A `.comp` opens by double-clicking it**, in the window that is already running rather than in a
+  second copy of the app.
+- **Updates that can be installed**, from the Help menu: the bundle is downloaded and its signature
+  checked against a public key compiled into the app before anything is replaced. See
+  [Updating](#updating).
 - **A Photoshop-shaped interface**, in English or Simplified Chinese, with user-installable
   language packs.
 - **Everything the file holds round-trips**, even where this build cannot yet render it.
@@ -66,10 +75,12 @@ than one that says it cannot be opened.
   commercial use and so is incompatible with this one.
 - **The Type tool.** Type layers round-trip; nothing edits them in the canvas yet.
 - **Layer comps, smart objects, video, and 3D.**
-- **Opening a `.comp` by double-clicking it**, and anything to do with a document you would not want
-  to lose: there is no autosave and no crash recovery.
-- **Installing an update.** *Checking* for one is implemented and tested; downloading a signed bundle
-  and replacing the running binary is the shell's job and is not wired up. See [Updating](#updating).
+- **A thumbnail in the file manager.** Explorer's thumbnail provider has to be a COM DLL, and a
+  thumbnail has to be *composited* — 24 blend modes, twelve adjustments, masks, effects. Either that
+  maths is written a third time in Rust (there are already two copies, TypeScript and WGSL, kept in
+  step by a test that reads the real shader) or the provider shells out to the app's own renderer,
+  which starts a webview for every file the file manager looks at. Neither is a good trade yet, so a
+  `.comp` shows the app's icon, which is what it showed before.
 
 ## Status
 
@@ -86,14 +97,15 @@ complete. Tier 3 is partly done.
 
 What is left of Tier 3 is [Not yet](#not-yet) and
 [What it will not open](#what-it-will-not-open-and-why): PSD and PSB, selecting a subject, the Type
-tool, Camera Raw, Remove Background, Liquify, Dither, shortcut remapping, a shell thumbnail handler,
-and the install half of updating.
+tool, Camera Raw, Remove Background, Liquify, Dither, shortcut remapping, and a shell thumbnail
+handler. Autosave and crash recovery, opening a project by double-clicking it, and the install half
+of updating are all here now, and are described above and in [Updating](#updating).
 
 Four things are here that the plan did not call for, because the port turned out to need them: SVG
 and TIFF import, mip chains for both of the frame's downsamples, and the retouch tools beyond clone
 stamp and spot healing — Blur, Sharpen, Smudge, Dodge, Burn and Sponge.
 
-**Where it stands:** version 0.1.0, with 263 TypeScript tests, 35 Rust tests, and 24 pixel cases that
+**Where it stands:** version 0.1.0, with 274 TypeScript tests, 43 Rust tests, and 25 pixel cases that
 drive a real build in headless Chrome. `pnpm check` runs the first two; the pixel cases need a dev
 server and `scripts/dev-browser.mjs`, which [docs/architecture.md](docs/architecture.md) explains.
 
@@ -120,7 +132,7 @@ The other scripts:
 |---|---|
 | `pnpm check` | Every Rust and TypeScript test |
 | `pnpm build` | The frontend bundle |
-| `pnpm tauri build` | A desktop bundle to install |
+| `pnpm tauri build` | A desktop bundle to install. Needs `TAURI_SIGNING_PRIVATE_KEY` set, because the bundles are signed for the updater either way — see [Updating](#updating). |
 | `node scripts/make-sample-comp.mjs` | Regenerates `examples/sample.comp` |
 | `node scripts/dev-browser.mjs` | Headless Chrome with WebGPU, for scripted interface checks |
 
@@ -214,28 +226,57 @@ updater speaks:
   "signature": "…" } } } ] }
 ```
 
-Where it looks is one line: `updateEndpoint` in `web/src/state/session.ts`, defaulting to
-`http://localhost:8787/latest.json`. Serve that file from anywhere static — a local server while
-developing, a release page afterwards.
+Where it looks is named in two places, and they have to agree: `plugins.updater.endpoints` in
+`src-tauri/tauri.conf.json`, which is the manifest the *installer* reads and is compiled into the
+binary, and `updateEndpoint` in `web/src/state/session.ts`, defaulting to the same
+`http://localhost:8787/latest.json`, which is the one the check reads so its answer can be tested
+without a shell. Serve that file from anywhere static — a local server while developing, a release
+page afterwards.
 
-### Installing, which is not built yet
+The second `Install Update…` item appears in the Help menu once a check has found a release with a
+bundle for this platform. Choosing it downloads the bundle, reports how far along it is in the menu
+bar, verifies the signature and installs, then restarts into the new build. Nothing is replaced
+until someone asks for it.
 
-Downloading a bundle and replacing the binary the app is running inside is the shell's job, and it
-is the half that needs signing keys. The steps, in order:
+### Installing: what a release needs
 
-1. Generate a key pair: `pnpm tauri signer generate -w ~/.tauri/compositor.key`. Keep the private
-   key private and put the **public** key in `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`.
-2. Add the updater plugin (`tauri-plugin-updater` in `src-tauri/Cargo.toml`, the same version's npm
-   package, and `updater:default` in `src-tauri/capabilities/default.json`), with
-   `plugins.updater.endpoints` naming the manifest above.
+The download, the signature check and the swap are wired up. Signing, however, needs keys, and they
+are per-project, so this is what a release does with them:
+
+1. Generate a key pair once: `pnpm tauri signer generate -w ~/.tauri/compositor.key`. Keep the
+   private key private — it is what makes an update installable — and put the **public** key in
+   `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`. A development key is already there: it
+   is the one generated while wiring this up, and it is why a locally built bundle can be installed
+   over a locally built one.
+2. Publish the manifest above wherever `plugins.updater.endpoints` names, with one entry per
+   platform and the bundle's `signature` beside its `url`.
 3. Build with the private key available: `TAURI_SIGNING_PRIVATE_KEY=… pnpm tauri build`. Tauri signs
-   each bundle and writes the signature into the manifest you publish.
-4. Point `updateEndpoint` at wherever that manifest is, and add a call to the plugin's `install`
-   where `checkForUpdates` now only reports.
+   each bundle and writes the signature into `bundle.createUpdaterArtifacts`, which is on — so
+   `pnpm tauri build` without the key fails rather than producing bundles that could never be
+   installed.
 
 Self-signed is deliberate while this is developed: a development build signed with its own key is a
 complete, verifiable path, and swapping in a real certificate later means generating the pair from
 that authority and replacing one public key. Nothing in the code assumes the development key.
+
+### Unsaved work, and what a crash costs
+
+A document with changes that are not on disk is snapshotted into the app's data folder — under
+`recovery/`, one folder per document — once the editing has stopped for five seconds and at most
+every thirty seconds. A snapshot is an ordinary `.comp` package, written through the same staging
+and atomic swap a save uses, plus a small sidecar saying which project it came from.
+
+That makes the lifecycle short and the recovery simple. A snapshot is thrown away when the work
+reaches its own file, and kept when a tab is closed with unsaved changes. So whatever is still there
+at startup belongs to work that was lost, and the app asks about it: recover it, or discard it.
+Recovering opens the snapshot as a document that remembers where it came from, and saving writes it
+back to that project — recovery never overwrites a project on its own, and never leaves a copy of
+one in the recovery folder. [docs/architecture.md](docs/architecture.md) has the reasoning.
+
+A `.comp` opened from Explorer or the file manager arrives as a command-line argument, and a second
+launch does not start a second copy of the app: it hands the path to the window already running,
+which opens the project there. Two processes writing one package is how a package gets corrupted,
+so there is only ever one.
 
 ## Attribution and licence
 

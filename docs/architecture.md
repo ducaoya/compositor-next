@@ -75,6 +75,74 @@ Rust never builds user-facing prose. `ProjectError` carries a translation key an
 placeholders, and the language pack says it — otherwise every error message would be English
 whichever language the interface was in.
 
+## Autosave, and what a snapshot is
+
+Crash recovery is built out of what already existed rather than out of a second way of writing
+projects. A snapshot *is* a `.comp` package: `begin_save` stages it, `write_asset` and `link_asset`
+fill it, `commit_save` swaps it in. An autosave therefore costs what a save costs, and there is no
+new code in which a half-written project could hide.
+
+Three decisions follow from that.
+
+**One folder per document, named after where it came from.** `Poster-3f2a19c4` is the file's stem
+plus an FNV-1a of its full path, so two projects both called `Untitled.comp`, on two drives, never
+share a snapshot — and someone looking in the folder can tell what is there. A document that has
+never been saved has no path to fingerprint, so its tab's id is the key instead, which is what keeps
+repeated autosaves of an untitled document on one folder rather than making a new one each time.
+
+**The sidecar is written after the swap, never before.** `<key>.json` records which project the
+snapshot beside it came from. Writing it first would leave a label pointing at a package a crash
+never finished, and the next start would offer a document that cannot be opened. A sidecar whose
+package no longer loads is dropped the moment it is listed, which is also the only cleanup needed:
+nothing else here can be left half-written.
+
+**A snapshot lives exactly as long as the work is unsaved.** Saving discards it, closing a clean tab
+discards it, closing a dirty one keeps it. That is what makes the startup question worth asking —
+anything still there belongs to work that was lost, to a crash or to a window closed with unsaved
+changes — and it is why nothing deletes snapshots on the way out. Deleting on exit is how crash
+recovery fails in precisely the case it exists for.
+
+When the editing has stopped is the frontend's business, because that is a question about a person
+and not about a file: five seconds of quiet, and no more than one snapshot per thirty seconds. The
+quiet time is what keeps a snapshot from being taken mid-drag; the gap is what keeps a document
+edited in bursts from being encoded every two seconds. Both live in `web/src/model/recovery.ts`
+beside the decision function, so the arithmetic is tested without a shell, a folder or a clock.
+
+Recovery never overwrites a project. A recovered document opens the snapshot — that package is what
+it is — and remembers the project it came from; saving writes back there, and then re-reads that
+project so its asset paths are the project's own files rather than the snapshot's, which is about to
+be deleted. Without that last step the following save would try to link from files that no longer
+exist. A recovered document that never had a path asks for one, because writing into the recovery
+folder would leave the real project untouched and two versions of everything.
+
+## One copy of the app, and one package
+
+A second launch of a `.comp` — a double-click while the app is already open — does not start a second
+copy. It hands its command line to the window that is running, which opens the project there. Two
+processes saving one package is the one thing staging and swapping cannot protect against: each
+would rename its own staging folder over the other's work.
+
+That is also why an arriving path is recognised by its extension rather than by its position:
+`comp_path_from_args` in `src-tauri/src/lib.rs` reads the whole argument list, trims the quotes the
+shell adds and the `\\?\` prefix Windows adds, and takes the first thing that ends in `.comp`. It is
+tested against the shapes a shell actually produces rather than the one shape a developer assumes.
+
+## The two halves of an update
+
+The decision half is TypeScript (`web/src/model/update.ts`): semver, including the two cases usually
+got wrong, and which release a manifest offers for this platform. It fetches the manifest itself
+through `setUpdateEndpoint`, so it can be tested without a shell — the update-check pixel case serves
+it from a `data:` URL.
+
+The installation half cannot be TypeScript at all, because it replaces the binary the webview is
+running inside. That half is Tauri's updater plugin: it downloads the bundle and verifies it against
+the public key compiled into the app. None of the download or the signature check is ours, and that
+is the point — a signature check written here would be a signature check written wrong.
+
+The consequence is that the manifest is named twice: `plugins.updater.endpoints` for the installer,
+compiled in, and `updateEndpoint` for the check. They have to agree. The check's answer is a report;
+the installer's is the truth.
+
 ## GPU failures are silent by default
 
 `Compositor.create` reads the shader's compilation info and wraps pipeline creation in a validation
@@ -148,9 +216,12 @@ pnpm check
   Node-written sample project.
 - `crates/shaders` — the WGSL parses, validates, and still matches the blend-mode and
   adjustment-kind lists.
+- `src-tauri` — the argument list a double-click arrives as, the naming and the checking of recovery
+  snapshots, and the file watcher.
 - `web` — the blend maths (including the sRGB-not-linear-light check), the adjustment maths, the
   selection and selection-mask maths, the layer tree, undo, the layer operations, the retouch and
-  filter kernels, the TIFF reader, the version comparison, and the i18n tables.
+  filter kernels, the TIFF reader, the version comparison, the download progress, the autosave
+  arithmetic, and the i18n tables.
 
 Behaviour that only a GPU can show was checked by driving the real interface in headless Chrome:
 every blend mode, every adjustment kind, the brush, the retouching tools, the filters, the

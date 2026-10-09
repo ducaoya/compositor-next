@@ -129,3 +129,64 @@ export function platformKey(userAgent: string): string {
   if (linux) return arm ? 'linux-aarch64' : 'linux-x86_64'
   return 'unknown'
 }
+
+/**
+ * One event the updater reports while a bundle downloads.
+ *
+ * A structural copy of what `@tauri-apps/plugin-updater` sends, kept here so the arithmetic below
+ * can be tested without the shell — which is the same reason `compareVersions` lives here rather
+ * than in the component that calls it.
+ */
+export type DownloadEvent =
+  | { event: 'Started'; data?: { contentLength?: number } }
+  | { event: 'Progress'; data?: { chunkLength?: number; contentLength?: number } }
+  | { event: 'Finished' }
+
+/** How far a download has got. */
+export interface DownloadState {
+  /** Bytes received so far. */
+  received: number
+  /** Bytes expected, or null when the server did not say — a manifest served without a length. */
+  total: number | null
+  finished: boolean
+}
+
+/** Nothing downloaded yet. */
+export const NOT_DOWNLOADING: DownloadState = { received: 0, total: null, finished: false }
+
+/**
+ * The state after one event.
+ *
+ * The length arrives on `Started` and is not repeated on every `Progress`, so the total carries
+ * forward; and a `Finished` with no length at all means the server never said how big the bundle
+ * was, which makes the bytes that arrived the only total there is.
+ */
+export function applyDownloadEvent(state: DownloadState, event: DownloadEvent): DownloadState {
+  switch (event.event) {
+    case 'Started':
+      return {
+        received: 0,
+        total: event.data?.contentLength ?? state.total,
+        finished: false,
+      }
+    case 'Progress': {
+      const received = state.received + (event.data?.chunkLength ?? 0)
+      const total = event.data?.contentLength ?? state.total
+      return { received, total: total ?? null, finished: false }
+    }
+    case 'Finished':
+      return { received: state.received, total: state.total ?? state.received, finished: true }
+  }
+}
+
+/**
+ * How far along a download is, as a whole percent, or null when it cannot be known.
+ *
+ * A progress bar that reports `0%` while the length is unknown is worse than one that says nothing,
+ * because it looks stuck rather than unmeasured.
+ */
+export function downloadPercent(state: DownloadState): number | null {
+  if (!state.total) return null
+  const fraction = state.received / state.total
+  return Math.min(100, Math.max(0, Math.round(fraction * 100)))
+}

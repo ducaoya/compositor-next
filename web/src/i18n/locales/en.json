@@ -73,7 +73,8 @@
     "tonalContrast": "Tonal Contrast…",
     "lensCorrection": "Lens Correction…",
     "removeBackground": "Remove Background",
-    "checkUpdates": "Check for Updates"
+    "checkUpdates": "Check for Updates",
+    "installUpdate": "Install Update…"
   },
   "tools": {
     "move": "Move",
@@ -272,6 +273,8 @@
     "contentAwareNoSource": "Not enough unselected, opaque image pixels to synthesize a fill. Use a smaller selection with some surrounding image.",
     "rawUnsupported": "{name} is a camera RAW file, and this build has no RAW decoder. The closest pure-Rust one is LGPL-2.1, which this MIT project cannot link.",
     "heicUnsupported": "{name} is a HEIC image, which needs a decoder from the platform. macOS has one and Windows has one, but reaching either from here is not done yet.",
+    "autosaveFailed": "This document could not be autosaved. Your changes are still here, but a crash would lose them.",
+    "recovered": "{name} was recovered. Save to write it back where it belongs.",
     "tiffUnreadable": "{name} is a TIFF this build cannot read: {problem}",
     "tiffProblem": {
       "not-tiff": "it is not a TIFF",
@@ -289,6 +292,7 @@
     "tooLarge": "This project exceeds the supported canvas, layer, file-size, or {megapixels}-megapixel document limit.",
     "encode": "An image could not be saved. The previous project has not been replaced.",
     "notFound": "There is no file or folder at {path}.",
+    "notASnapshot": "That is not a recovery snapshot of this app's.",
     "io": "{message}",
     "json": "The metadata is not valid JSON: {message}",
     "saveEnded": "That save session has ended.",
@@ -544,10 +548,26 @@
     "gaussianNoise": "Gaussian",
     "wholeLayer": "With no selection, the filter runs over the whole layer."
   },
+  "recovery": {
+    "title": "Recover Unsaved Work",
+    "body": "The last run ended with these documents unsaved:",
+    "from": "From {path}",
+    "neverSaved": "Never saved",
+    "savedAt": "Autosaved {when}",
+    "recover": "Recover",
+    "discard": "Discard",
+    "discardAll": "Discard All",
+    "notNow": "Not Now"
+  },
   "update": {
     "upToDate": "Compositor {version} is the newest release.",
     "available": "{version} is available, and you have {current}.",
     "noBundle": "{version} is available, but it has no build for this platform.",
-    "checkFailed": "The update server could not be reached."
+    "checkFailed": "The update server could not be reached.",
+    "downloading": "Downloading the update: {percent}%",
+    "downloadingUnknown": "Downloading the update…",
+    "installing": "Installing the update…",
+    "installed": "The update was installed. Restarting.",
+    "installFailed": "The update could not be installed. Nothing was changed."
   }
 }

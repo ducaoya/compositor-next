@@ -15,6 +15,7 @@ import {
   maskFileName,
   newUuid,
 } from '../model/document'
+import type { RecoveryEntry } from '../model/recovery'
 import {
   DEFAULT_LIMITS,
   type AppLimits,
@@ -63,6 +64,18 @@ export interface Backend {
   openProjectAt(path: string): Promise<OpenedProject>
   createProject(width: number, height: number): Promise<OpenedProject | null>
   saveProject(project: OpenedProject, manifest: Manifest, bytes: AssetBytes): Promise<OpenedProject>
+  /**
+   * Where a document that has no path of its own should be written.
+   *
+   * A recovered document that was never saved has nowhere to go back to, and the alternative is
+   * writing into the recovery folder, which is not where anyone's project lives. Null means the
+   * user closed the picker.
+   */
+  chooseProjectPath(suggestedName: string): Promise<string | null>
+  /** The project the shell was launched with, when this launch came from a double-click on one. */
+  startupProject(): Promise<string | null>
+  /** Autosave snapshots: where they go, and what is already there. */
+  readonly recovery: RecoveryStore
   /** Shows a picker and returns whatever the user chose, or nothing. */
   pickImages(): Promise<PickedImage[]>
   /** Reads files the operating system dropped, which arrive as paths. */
@@ -76,6 +89,23 @@ export interface Backend {
   limits(): Promise<AppLimits>
   exportFile(suggestedName: string, blob: Blob): Promise<void>
   reportError(message: string): Promise<void>
+}
+
+/**
+ * The shell's side of autosave.
+ *
+ * A snapshot is an ordinary `.comp` package in the app's data folder, written through the same
+ * staging-and-swap a save uses, so none of this needs a second way of writing projects.
+ */
+export interface RecoveryStore {
+  /** Where this document's snapshot goes, made ready to be written into. */
+  prepare(origin: string, document: string): Promise<string>
+  /** Records which project a committed snapshot beside it came from. */
+  label(target: string, origin: string, document: string, name: string): Promise<void>
+  /** Every snapshot worth offering, newest first. */
+  list(): Promise<RecoveryEntry[]>
+  /** Throws one away. */
+  discard(target: string): Promise<void>
 }
 
 export function assetKey(layerId: string, kind: AssetKind): string {
@@ -196,6 +226,25 @@ async function tauriBackend(): Promise<Backend> {
         throw error
       }
       return { ...project, manifest }
+    },
+
+    async chooseProjectPath(suggestedName) {
+      const chosen = await dialog.save({ title: 'Save Project', defaultPath: suggestedName })
+      return chosen ? ensureExtension(chosen, '.comp') : null
+    },
+
+    async startupProject() {
+      return invoke<string | null>('startup_project')
+    },
+
+    recovery: {
+      prepare: (origin, document) => invoke<string>('prepare_recovery', { origin, document }),
+      label: (target, origin, document, name) =>
+        invoke('label_recovery', { target, origin, document, name }),
+      list: () => invoke<RecoveryEntry[]>('list_recovery'),
+      discard: async (target) => {
+        await invoke('discard_recovery', { target })
+      },
     },
 
     async pickImages() {
@@ -434,6 +483,31 @@ function browserBackend(): Backend {
       // mistaken for the same project.
       current = await demoProject('')
       return { ...current, manifest: structuredClone(current.manifest) }
+    },
+
+    async chooseProjectPath() {
+      // Nowhere to write to, so there is no path to offer.
+      return null
+    },
+
+    async startupProject() {
+      // A browser is not launched by a double-click on a project.
+      return null
+    },
+
+    recovery: {
+      async prepare() {
+        return ''
+      },
+      async label() {
+        // Nothing is written, so there is nothing to label.
+      },
+      async list() {
+        return []
+      },
+      async discard() {
+        // Nothing to throw away.
+      },
     },
 
     async saveProject(project, manifest) {

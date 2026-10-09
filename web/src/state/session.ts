@@ -105,15 +105,27 @@ import {
 import { blurred } from '../render/retouch'
 import { RETOUCH_TOOLS } from '../model/tools'
 import { decodeImport, ImportError } from '../io/imports'
-import { bundleFor, newerRelease, platformKey, type UpdateRelease } from '../model/update'
+import type { Update } from '@tauri-apps/plugin-updater'
+import {
+  NOT_DOWNLOADING,
+  applyDownloadEvent,
+  bundleFor,
+  downloadPercent,
+  newerRelease,
+  platformKey,
+  type DownloadEvent,
+  type DownloadState,
+  type UpdateRelease,
+} from '../model/update'
+import { autosaveDue, recoveryLabel, type RecoveryEntry } from '../model/recovery'
 import type { ToneRange } from '../render/retouch'
 import {
   assetKey,
   backend,
   type AssetBytes,
+  type Backend,
   type OpenedProject,
 } from './backend'
-
 export interface ViewState {
   zoom: number
   panX: number
@@ -132,6 +144,20 @@ const limits = ref<AppLimits>(DEFAULT_LIMITS)
 const busy = ref(false)
 const message = ref<string | null>(null)
 const dirty = ref(false)
+/**
+ * When the document last changed, and when it was last snapshotted.
+ *
+ * Wall clock, not a counter: the question autosave asks is about *time* — has the editing stopped
+ * long enough to be worth writing down? — and both are read only against the current time.
+ */
+let changedAt = Date.now()
+let autosavedAt = Date.now()
+
+/** Notes that the document has changes that are not on disk, and when that happened. */
+function markChanged(): void {
+  dirty.value = true
+  changedAt = Date.now()
+}
 const compositor = shallowRef<Compositor | null>(null)
 const canRender = ref(false)
 /**
@@ -176,6 +202,16 @@ interface DocumentRecord {
   selectedIds: string[]
   collapsed: Set<string>
   dirty: boolean
+  /**
+   * The project this document came from, when it was recovered from a snapshot.
+   *
+   * A recovered document opens the snapshot, which is what it *is* — a package of its own, with
+   * its own assets — but saving has to write back to the project the work belongs to, or recovery
+   * would quietly turn one project into two.
+   */
+  origin: string
+  /** The snapshot covering this document, empty when there is none. */
+  snapshot: string
 }
 
 /**
@@ -307,13 +343,36 @@ export async function closeDocument(id: string): Promise<void> {
   stashActive()
   const index = documents.value.findIndex((item) => item.id === id)
   if (index < 0) return
-  releaseDocument(documents.value[index])
+  const closing = documents.value[index]
+  // A tab closed with unsaved changes keeps its snapshot: that snapshot *is* the work, and closing
+  // a tab is not the same as saying the work can be thrown away. A clean tab has nothing to keep.
+  if (!closing.dirty) await discardSnapshot(closing)
+  releaseDocument(closing)
   documents.value = documents.value.filter((item) => item.id !== id)
   touchDocuments()
   if (activeDocumentId.value !== id) return
   const next = documents.value[index] ?? documents.value[index - 1] ?? null
   if (next) await restoreDocument(next)
   else clearDocument()
+}
+
+/**
+ * Throws away a document's snapshot, if it has one.
+ *
+ * Called when the work it stands for has reached its own file, and when a clean tab is closed.
+ * A failure here is not worth interrupting anyone for: the cost of a snapshot left behind is one
+ * question at the next start, and the cost of a failed save is the work.
+ */
+async function discardSnapshot(record: DocumentRecord): Promise<void> {
+  const target = record.snapshot
+  record.snapshot = ''
+  if (!target) return
+  try {
+    const client = await backend()
+    if (client.writable) await client.recovery.discard(target)
+  } catch (error) {
+    console.warn('a recovery snapshot could not be discarded', error)
+  }
 }
 
 // MARK: - Tools, colours and painting
@@ -619,6 +678,16 @@ export function useSession() {
     applyFilter,
     checkForUpdates,
     setUpdateEndpoint,
+    installUpdate,
+    updateAvailable,
+    updatePercent,
+    updatePhase,
+    recoveryPrompt,
+    recoverSnapshot,
+    discardSnapshotEntry,
+    discardAllSnapshots,
+    dismissRecovery,
+    checkForRecovery,
     lassoPolygonal,
     lassoPoints,
     showsRulers,
@@ -737,7 +806,7 @@ function edit(label: string, body: (manifest: Manifest) => boolean | void): bool
   }
   const recorded = history.commit(current)
   if (recorded) {
-    dirty.value = true
+    markChanged()
     bumpHistory()
   }
   return true
@@ -818,7 +887,7 @@ export function endEdit(): void {
   const current = manifest.value
   if (!current) return
   if (history.commit(current)) {
-    dirty.value = true
+    markChanged()
     bumpHistory()
   }
 }
@@ -829,7 +898,7 @@ export function undo(): void {
   const restored = history.undo(current)
   if (!restored) return
   manifest.value = restored
-  dirty.value = true
+  markChanged()
   bumpHistory()
 }
 
@@ -839,7 +908,7 @@ export function redo(): void {
   const restored = history.redo(current)
   if (!restored) return
   manifest.value = restored
-  dirty.value = true
+  markChanged()
   bumpHistory()
 }
 
@@ -984,7 +1053,10 @@ async function watchProject(): Promise<void> {
  * Opening the same file twice would give two tabs writing to one package, so a path that is
  * already open is activated instead.
  */
-async function adopt(opened: OpenedProject): Promise<void> {
+async function adopt(
+  opened: OpenedProject,
+  options: { origin?: string; snapshot?: string } = {},
+): Promise<void> {
   stashActive()
   if (opened.path) {
     const existing = documents.value.find((item) => item.path === opened.path)
@@ -1006,7 +1078,11 @@ async function adopt(opened: OpenedProject): Promise<void> {
     activeLayerId: opened.manifest.activeLayerID ?? opened.manifest.layers.at(-1)?.id ?? null,
     selectedIds: [],
     collapsed: new Set(),
-    dirty: false,
+    // A recovered document's changes are not in the project they belong to yet, which is exactly
+    // what the unsaved-changes dot means.
+    dirty: Boolean(options.snapshot),
+    origin: options.origin ?? '',
+    snapshot: options.snapshot ?? '',
   }
   documents.value = [...documents.value, record]
   touchDocuments()
@@ -1036,24 +1112,236 @@ export async function saveProject(): Promise<void> {
   const current = manifest.value
   const opened = project.value
   if (!current || !opened) return
+  const record = documents.value.find((item) => item.id === activeDocumentId.value)
   await guard(async () => {
     const client = await backend()
     if (!client.writable) {
       message.value = t('message.browserPreview')
       return
     }
-    // Anything the brush touched is re-encoded here; everything else is linked from the file it
-    // already has, which is what keeps saving a large document cheap.
-    for (const surfaceId of modifiedSurfaces) {
-      const [layerId, surfaceKind] = surfaceId.split('|')
-      const bytes = await paintStore.encode(layerId, surfaceKind === 'mask' ? 'mask' : 'image')
-      if (bytes) pendingBytes.set(surfaceId, bytes)
+    // Where this document goes: the project it came from when it came back from a snapshot, its
+    // own path otherwise, or wherever the user says for a recovered document that never had one —
+    // writing into the snapshot folder would leave the real project untouched.
+    let target = record?.origin || opened.path
+    if (!target) {
+      const chosen = await client.chooseProjectPath(record ? documentName(record) : 'Untitled.comp')
+      if (!chosen) return
+      target = chosen
     }
-    project.value = await client.saveProject(opened, current, pendingBytes)
-    pendingBytes = new Map()
+    const written = await writePackage(client, target, opened, current)
+    // A recovered document opened the snapshot, whose assets are the snapshot's own files. Once the
+    // work is back where it belongs those files are about to go, so the assets are re-read from the
+    // project that now holds them; the pixels are already on the GPU and are not decoded twice.
+    project.value = target === opened.path ? written : await client.openProjectAt(target)
+    if (record) {
+      record.path = project.value.path
+      record.origin = ''
+      record.dirty = false
+      await discardSnapshot(record)
+      touchDocuments()
+    }
     dirty.value = false
+    // Nothing is outstanding, so the next edit is due a snapshot after the quiet time alone rather
+    // than after the gap between two of them.
+    changedAt = Date.now()
+    autosavedAt = 0
     message.value = t('message.saved')
   })
+}
+
+/**
+ * Encodes whatever the brush touched and writes the whole package to `target`.
+ *
+ * Shared by saving and by autosaving, because a snapshot really is a project: the same staging
+ * folder, the same atomic swap, the same refusal to leave a half-written package behind. An
+ * autosave therefore costs what a save costs, which is why one only runs while a document is dirty
+ * and only once the editing has stopped.
+ */
+async function writePackage(
+  client: Backend,
+  target: string,
+  opened: OpenedProject,
+  current: Manifest,
+): Promise<OpenedProject> {
+  for (const surfaceId of modifiedSurfaces) {
+    const [layerId, surfaceKind] = surfaceId.split('|')
+    const bytes = await paintStore.encode(layerId, surfaceKind === 'mask' ? 'mask' : 'image')
+    if (bytes) pendingBytes.set(surfaceId, bytes)
+  }
+  const written = await client.saveProject({ ...opened, path: target }, current, pendingBytes)
+  pendingBytes = new Map()
+  return written
+}
+
+// MARK: - Autosave and recovery
+
+/**
+ * How often the autosave timer looks at the document.
+ *
+ * Faster than `AUTOSAVE_QUIET_MS` so the quiet time, not the tick, is what decides when a snapshot
+ * is taken; the tick only decides how late it can be.
+ */
+const AUTOSAVE_TICK_MS = 2_000
+
+let autosaveTimer: ReturnType<typeof setInterval> | null = null
+
+/**
+ * The snapshots the last run left behind, and whether the offer is on screen.
+ *
+ * A snapshot only exists while a document has changes that never reached its own file, so anything
+ * listed here is work that was lost — to a crash, or to a window closed with unsaved changes.
+ */
+export const recoveryPrompt = reactive({ open: false, entries: [] as RecoveryEntry[] })
+
+/** Starts looking for a document that has gone quiet enough to snapshot. */
+export function startAutosave(): void {
+  if (autosaveTimer !== null) return
+  autosaveTimer = setInterval(() => void autosaveIfDue(), AUTOSAVE_TICK_MS)
+}
+
+export function stopAutosave(): void {
+  if (autosaveTimer === null) return
+  clearInterval(autosaveTimer)
+  autosaveTimer = null
+}
+
+/**
+ * Writes a snapshot of the active document, if one is due.
+ *
+ * The document stays dirty afterwards, and deliberately: a snapshot is not a save. It is written to
+ * the app's data folder, which is not where the project lives, and it is thrown away the moment the
+ * work does reach the project. The tab keeps its unsaved-changes dot for the same reason.
+ */
+async function autosaveIfDue(): Promise<void> {
+  const record = documents.value.find((item) => item.id === activeDocumentId.value)
+  const current = manifest.value
+  const opened = project.value
+  if (!record || !current || !opened || busy.value) return
+  if (!autosaveDue({ dirty: dirty.value, now: Date.now(), changedAt, autosavedAt })) return
+  try {
+    const client = await backend()
+    if (!client.writable) return
+    const target = await client.recovery.prepare(record.origin, record.id)
+    await writePackage(client, target, opened, current)
+    await client.recovery.label(target, record.origin, record.id, documentName(record))
+    record.snapshot = target
+    autosavedAt = Date.now()
+  } catch (error) {
+    console.error('the document could not be snapshotted', error)
+    message.value = t('message.autosaveFailed')
+    // The clock moves on even so: a snapshot folder that cannot be written is not going to start
+    // working two seconds from now, and retrying every tick would turn one failure into a flood.
+    autosavedAt = Date.now()
+  }
+}
+
+/** Whether this window is the desktop shell rather than a plain browser. */
+function inShell(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+}
+
+/** Opens a project by path, which is what a double-click and a recovery both name. */
+export async function openProjectPath(path: string): Promise<void> {
+  await guard(async () => {
+    const opened = await (await backend()).openProjectAt(path)
+    await adopt(opened)
+    canRender.value = compositor.value !== null
+  })
+}
+
+/**
+ * Opens the project the shell was launched with, when this launch came from a double-click on one.
+ *
+ * Asked for rather than pushed: the shell reads its argument list before the window exists, so the
+ * answer waits here until the webview is ready for it. Answered once, so a reload cannot open the
+ * same project twice.
+ */
+export async function openStartupProject(): Promise<void> {
+  if (!inShell()) return
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const path = await invoke<string | null>('startup_project')
+    if (path) await openProjectPath(path)
+  } catch (error) {
+    console.warn('the shell did not name a project to open', error)
+  }
+}
+
+let openEventBound = false
+
+/**
+ * Opens the projects a later double-click asks for.
+ *
+ * A second launch does not start a second copy — one project written by two processes is how a
+ * package gets corrupted — so it hands its argument to the window already running, which arrives
+ * here as an event.
+ */
+export async function listenForProjectOpen(): Promise<void> {
+  if (!inShell() || openEventBound) return
+  openEventBound = true
+  try {
+    const { listen } = await import('@tauri-apps/api/event')
+    await listen<string>('project:open', (event) => {
+      if (typeof event.payload === 'string') void openProjectPath(event.payload)
+    })
+  } catch (error) {
+    console.warn('a double-click cannot reach this window', error)
+  }
+}
+
+/** Asks what the last run left unsaved, and offers it. */
+export async function checkForRecovery(): Promise<void> {
+  try {
+    const client = await backend()
+    if (!client.writable) return
+    const entries = await client.recovery.list()
+    if (entries.length === 0) return
+    recoveryPrompt.entries = entries
+    recoveryPrompt.open = true
+  } catch (error) {
+    console.warn('the recovery folder could not be read', error)
+  }
+}
+
+/**
+ * Opens one snapshot, remembering the project it came from.
+ *
+ * The snapshot opens as the package it is, but the tab remembers where the work belongs, and that
+ * is where a save goes — recovering a document must not quietly fork a project in two.
+ */
+export async function recoverSnapshot(entry: RecoveryEntry): Promise<void> {
+  await guard(async () => {
+    const opened = await (await backend()).openProjectAt(entry.target)
+    await adopt(opened, { origin: entry.origin, snapshot: entry.target })
+    canRender.value = compositor.value !== null
+    message.value = t('message.recovered', { name: recoveryLabel(entry) })
+  })
+}
+
+/** Throws one snapshot away, because that work is not wanted back. */
+export async function discardSnapshotEntry(entry: RecoveryEntry): Promise<void> {
+  const client = await backend()
+  if (client.writable) await client.recovery.discard(entry.target)
+  dropEntry(entry.target)
+}
+
+/** Throws every offered snapshot away. */
+export async function discardAllSnapshots(): Promise<void> {
+  const client = await backend()
+  for (const entry of [...recoveryPrompt.entries]) {
+    if (client.writable) await client.recovery.discard(entry.target).catch(() => undefined)
+    dropEntry(entry.target)
+  }
+}
+
+/** Closes the offer, leaving the snapshots for the next start. */
+export function dismissRecovery(): void {
+  recoveryPrompt.open = false
+}
+
+function dropEntry(target: string): void {
+  recoveryPrompt.entries = recoveryPrompt.entries.filter((entry) => entry.target !== target)
+  if (recoveryPrompt.entries.length === 0) recoveryPrompt.open = false
 }
 
 // MARK: - Layer actions
@@ -3110,6 +3398,16 @@ async function importWhatever(
 
 let updateEndpoint = 'http://localhost:8787/latest.json'
 
+/** The version waiting to be installed, or null when there is nothing newer to install. */
+const updateAvailable = ref<string | null>(null)
+
+/** What an install is doing, for the menu item and the progress in the menu bar. */
+const updatePhase = ref<'idle' | 'downloading' | 'installing'>('idle')
+const updateDownload = ref<DownloadState>(NOT_DOWNLOADING)
+
+/** How far the download has got, or null while that is not knowable yet. */
+export const updatePercent = computed(() => downloadPercent(updateDownload.value))
+
 /**
  * Points the update check somewhere else, for a development server or a test.
  *
@@ -3144,18 +3442,76 @@ export async function checkForUpdates(): Promise<void> {
     const releases = Array.isArray(body) ? body : (body.releases ?? [])
     const release = newerRelease(releases, current)
     if (!release) {
+      updateAvailable.value = null
       report(t('update.upToDate', { version: current }))
       return
     }
     const bundle = bundleFor(release, platformKey(navigator.userAgent))
+    // Only a release with a build for this platform is one the shell can install; the rest is news.
+    updateAvailable.value = bundle ? release.version : null
     report(
       bundle
         ? t('update.available', { version: release.version, current })
         : t('update.noBundle', { version: release.version }),
     )
   } catch {
+    updateAvailable.value = null
     report(t('update.checkFailed'))
   }
+}
+
+/**
+ * Downloads what the check found, verifies it, and installs it.
+ *
+ * The half that needs the shell, because installing means replacing the binary the app is running
+ * inside. Tauri's updater downloads the bundle and checks its signature against the public key
+ * compiled into the app (`plugins.updater.pubkey` in `src-tauri/tauri.conf.json`), so a manifest
+ * that has been tampered with is refused rather than run — and the key is not something the webview
+ * or an attacker with the manifest can supply.
+ *
+ * Nothing is installed without the user asking: this runs from the menu item that only appears once
+ * a check has found something.
+ */
+export async function installUpdate(): Promise<void> {
+  if (!updateAvailable.value) return
+  await guard(async () => {
+    const { check } = await import('@tauri-apps/plugin-updater')
+    let update: Update | null = null
+    try {
+      update = await check()
+    } catch (error) {
+      console.error('the updater could not be asked what is available', error)
+      message.value = t('update.installFailed')
+      return
+    }
+    if (!update) {
+      // Up to date after all: the release was pulled between the check and this click.
+      updateAvailable.value = null
+      message.value = t('update.upToDate', { version: await applicationVersion() })
+      return
+    }
+    updateDownload.value = NOT_DOWNLOADING
+    updatePhase.value = 'downloading'
+    try {
+      await update.downloadAndInstall((event) => {
+        updateDownload.value = applyDownloadEvent(updateDownload.value, event as DownloadEvent)
+        if (event.event === 'Finished') updatePhase.value = 'installing'
+      })
+    } catch (error) {
+      console.error('the update could not be installed', error)
+      updatePhase.value = 'idle'
+      updateDownload.value = NOT_DOWNLOADING
+      message.value = t('update.installFailed')
+      return
+    }
+    updatePhase.value = 'idle'
+    updateDownload.value = NOT_DOWNLOADING
+    updateAvailable.value = null
+    message.value = t('update.installed')
+    // The new build is on disk; the one running is still the old one until the app restarts.
+    const { relaunch } = await import('@tauri-apps/plugin-process')
+    await relaunch()
+  })
 }
 
 /**
@@ -3369,7 +3725,13 @@ if (typeof window !== 'undefined') {
       closeFilterSheet,
       applyFilter,
       checkForUpdates,
+      installUpdate,
       setUpdateEndpoint,
+      checkForRecovery,
+      dismissRecovery,
+      get recoveryPrompt() {
+        return recoveryPrompt
+      },
       mergeDown,
       mergeLayers,
       resizeCanvas,

@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
-import { bundleFor, compareVersions, newerRelease, parseVersion, platformKey } from '../update'
+import {
+  NOT_DOWNLOADING,
+  applyDownloadEvent,
+  bundleFor,
+  compareVersions,
+  downloadPercent,
+  newerRelease,
+  parseVersion,
+  platformKey,
+} from '../update'
 
 describe('reading a version', () => {
   it('takes the parts a release has', () => {
@@ -95,5 +104,44 @@ describe("this platform's key", () => {
 
   it('says unknown rather than guessing, so nothing is installed by accident', () => {
     expect(platformKey('something else entirely')).toBe('unknown')
+  })
+})
+
+describe('a download in progress', () => {
+  it('counts the bytes each event reports', () => {
+    let state = applyDownloadEvent(NOT_DOWNLOADING, { event: 'Started', data: { contentLength: 1000 } })
+    expect(state).toEqual({ received: 0, total: 1000, finished: false })
+    state = applyDownloadEvent(state, { event: 'Progress', data: { chunkLength: 250 } })
+    state = applyDownloadEvent(state, { event: 'Progress', data: { chunkLength: 250 } })
+    expect(state.received).toBe(500)
+    expect(state.total).toBe(1000)
+    expect(downloadPercent(state)).toBe(50)
+    state = applyDownloadEvent(state, { event: 'Finished' })
+    expect(state).toEqual({ received: 500, total: 1000, finished: true })
+  })
+
+  it('keeps the length when a progress event does not repeat it', () => {
+    let state = applyDownloadEvent(NOT_DOWNLOADING, { event: 'Started', data: { contentLength: 400 } })
+    state = applyDownloadEvent(state, { event: 'Progress', data: { chunkLength: 100 } })
+    expect(state.total).toBe(400)
+    expect(downloadPercent(state)).toBe(25)
+  })
+
+  it('has no percentage to report when the server never said how big the bundle is', () => {
+    let state = applyDownloadEvent(NOT_DOWNLOADING, { event: 'Started' })
+    state = applyDownloadEvent(state, { event: 'Progress', data: { chunkLength: 100 } })
+    expect(state.total).toBeNull()
+    // Not zero: a bar stuck at zero looks like a failure rather than an unmeasured download.
+    expect(downloadPercent(state)).toBeNull()
+    state = applyDownloadEvent(state, { event: 'Finished' })
+    expect(state.total).toBe(100)
+    expect(downloadPercent(state)).toBe(100)
+  })
+
+  it('rounds and never reports more than all of it', () => {
+    expect(downloadPercent({ received: 1, total: 3, finished: false })).toBe(33)
+    // A server that under-reports its length must not make the bar read 140%.
+    expect(downloadPercent({ received: 140, total: 100, finished: false })).toBe(100)
+    expect(downloadPercent({ received: 0, total: 0, finished: false })).toBeNull()
   })
 })

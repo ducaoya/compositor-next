@@ -61,6 +61,23 @@ pub fn limits() -> Limits {
     Limits::default()
 }
 
+/// The `.comp` the shell was asked to open, when the app was launched by a double-click.
+///
+/// Taken rather than read, so that a webview reload cannot open the same project a second time —
+/// opening a project twice would give two tabs writing to one package.
+#[derive(Default)]
+pub struct StartupProject(Mutex<Option<String>>);
+
+impl StartupProject {
+    pub fn new(path: Option<String>) -> Self {
+        Self(Mutex::new(path))
+    }
+
+    pub fn take(&self) -> Option<String> {
+        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take()
+    }
+}
+
 /// Reads a project and resolves its assets.
 pub fn load(path: &str) -> Result<Project, compositor_core::ProjectError> {
     compositor_core::package::load(path, &limits())

@@ -1157,6 +1157,22 @@ const CASES = [
   },
 
   {
+    name: 'a browser preview has nothing to recover',
+    // Recovery belongs to the shell: a snapshot is a package in the app's data folder, written by
+    // Rust, and a browser has neither the folder nor the writer. The offer therefore has to come
+    // back empty rather than half-built — the same reason a browser preview cannot save.
+    probe: `(async () => { ${PRELUDE}
+      await freshDocument()
+      s.dismissRecovery()
+      await s.checkForRecovery()
+      return {
+        pass: s.recoveryPrompt.open === false && s.recoveryPrompt.entries.length === 0,
+        detail: { open: s.recoveryPrompt.open, entries: s.recoveryPrompt.entries.length },
+      }
+    })()`,
+  },
+
+  {
     name: 'gaussian blur smooths',
     probe: `(async () => { ${PRELUDE}
       const r = await setup('Gaussian Blur', (a) => { a.blurRadius = 24 })

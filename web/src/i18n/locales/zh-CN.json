@@ -73,7 +73,8 @@
     "tonalContrast": "色调对比…",
     "lensCorrection": "镜头校正…",
     "removeBackground": "移除背景",
-    "checkUpdates": "检查更新"
+    "checkUpdates": "检查更新",
+    "installUpdate": "安装更新…"
   },
   "tools": {
     "move": "移动",
@@ -272,6 +273,8 @@
     "contentAwareNoSource": "未选中且不透明的像素不足，无法合成填充。请缩小选区，并保留一些周围图像。",
     "rawUnsupported": "{name} 是相机 RAW 文件，本版本没有 RAW 解码器。最接近的纯 Rust 实现为 LGPL-2.1，与本项目 MIT 许可不兼容。",
     "heicUnsupported": "{name} 是 HEIC 图像，需要由平台提供解码器。macOS 与 Windows 都有，但本版本尚未接入。",
+    "autosaveFailed": "无法自动保存此文档。改动仍在，但一旦崩溃就会丢失。",
+    "recovered": "已恢复 {name}。保存后会写回它原本的项目。",
     "tiffUnreadable": "{name} 是本版本无法读取的 TIFF：{problem}",
     "tiffProblem": {
       "not-tiff": "它不是 TIFF",
@@ -289,6 +292,7 @@
     "tooLarge": "该工程超出画布、图层、文件大小或 {megapixels} 百万像素的文档上限。",
     "encode": "图像保存失败。上一个工程未被替换。",
     "notFound": "{path} 处没有文件或文件夹。",
+    "notASnapshot": "这不是本应用的恢复快照。",
     "io": "{message}",
     "json": "元数据不是有效的 JSON：{message}",
     "saveEnded": "该存储会话已结束。",
@@ -544,10 +548,26 @@
     "gaussianNoise": "高斯分布",
     "wholeLayer": "未建立选区时，滤镜作用于整个图层。"
   },
+  "recovery": {
+    "title": "恢复未保存的工作",
+    "body": "上次运行结束时，这些文档尚未保存：",
+    "from": "来自 {path}",
+    "neverSaved": "从未保存",
+    "savedAt": "自动保存于 {when}",
+    "recover": "恢复",
+    "discard": "丢弃",
+    "discardAll": "全部丢弃",
+    "notNow": "稍后再说"
+  },
   "update": {
     "upToDate": "Compositor {version} 已是最新版本。",
     "available": "有新版本 {version}，当前为 {current}。",
     "noBundle": "有新版本 {version}，但没有适用于当前平台的构建。",
-    "checkFailed": "无法连接到更新服务器。"
+    "checkFailed": "无法连接到更新服务器。",
+    "downloading": "正在下载更新：{percent}%",
+    "downloadingUnknown": "正在下载更新…",
+    "installing": "正在安装更新…",
+    "installed": "更新已安装，正在重启。",
+    "installFailed": "更新安装失败，未做任何改动。"
   }
 }

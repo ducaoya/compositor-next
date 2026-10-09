@@ -14,7 +14,7 @@ use tauri::{
     AppHandle, Manager, State,
 };
 
-use crate::state::{self, SaveSessions};
+use crate::state::{self, SaveSessions, StartupProject};
 
 /// A failure the frontend can translate.
 ///
@@ -82,6 +82,16 @@ pub struct OpenedProject {
 #[tauri::command]
 pub fn open_project(app: AppHandle, path: String) -> Result<OpenedProject, CommandError> {
     describe(&app, &path).map_err(CommandError::from)
+}
+
+/// The project the shell was asked to open, when this launch came from a double-click.
+///
+/// Answered once. A cold start arrives by this call and a second launch of the same file arrives as
+/// the `project:open` event instead, so neither path runs twice for one double-click — opening a
+/// project that is already open would give two tabs writing to one package.
+#[tauri::command]
+pub fn startup_project(state: State<'_, StartupProject>) -> Option<String> {
+    state.take()
 }
 
 /// Makes an empty project on disk, then opens it.

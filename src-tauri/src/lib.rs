@@ -13,21 +13,69 @@
 //!
 //! A failed or abandoned save is `abort_save`, and a crash leaves only a staging folder that the
 //! next `begin_save` sweeps away.
+//!
+//! Opening goes the other way: `open_project` answers with the manifest and each asset's path, and
+//! the webview fetches the pixels itself over the asset protocol.
 
 mod commands;
+mod recovery;
 mod state;
 mod watcher;
 
-pub use state::SaveSessions;
+pub use state::{SaveSessions, StartupProject};
 pub use watcher::Watchers;
+
+use tauri::{Emitter, Manager};
+
+/// The `.comp` a command line is asking to open, if it names one.
+///
+/// A double-click on a project reaches the app as an argument, and Tauri does not read the argument
+/// list on its own, so this is where "open this file" arrives. A path is recognised by its
+/// extension rather than by position because the argument list also carries the shell's own flags —
+/// and because a second launch forwards *its* whole command line, which has the path in it too.
+///
+/// The Windows verbatim prefix (`\\?\`) is dropped and surrounding quotes are trimmed: both are
+/// how the path arrives, and neither belongs in a path the rest of the app uses.
+fn comp_path_from_args<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    args.into_iter()
+        .map(|arg| arg.trim().trim_matches('"'))
+        .find_map(|arg| {
+            let path = arg.strip_prefix(r"\\?\").unwrap_or(arg);
+            if path.len() > 5 && path.to_ascii_lowercase().ends_with(".comp") {
+                Some(path.to_owned())
+            } else {
+                None
+            }
+        })
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Read before the window exists: the shell hands the path to the process, and the webview asks
+    // for it once it is up, so that a cold start opens the project a double-click named.
+    let startup_project =
+        comp_path_from_args(std::env::args().skip(1).collect::<Vec<_>>().iter().map(String::as_str));
+
     tauri::Builder::default()
+        // Registered first, as the plugin asks: a second launch of a `.comp` has to reach the
+        // window that is already running rather than start a rival copy holding the same project.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if let Some(path) = comp_path_from_args(argv.iter().map(String::as_str)) {
+                let _ = app.emit("project:open", path);
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(SaveSessions::default())
         .manage(Watchers::default())
+        .manage(StartupProject::new(startup_project))
         .invoke_handler(tauri::generate_handler![
             commands::open_project,
             commands::create_project,
@@ -43,8 +91,53 @@ pub fn run() {
             commands::list_language_packs,
             commands::install_language_pack,
             commands::open_language_folder,
+            commands::startup_project,
+            recovery::prepare_recovery,
+            recovery::label_recovery,
+            recovery::list_recovery,
+            recovery::discard_recovery,
             watcher::watch_project,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::comp_path_from_args;
+
+    #[test]
+    fn finds_a_comp_path_anywhere_in_the_argument_list() {
+        assert_eq!(
+            comp_path_from_args(["Compositor.exe", "--flag", r"C:\Work\Poster.comp"]),
+            Some(r"C:\Work\Poster.comp".to_string())
+        );
+        assert_eq!(comp_path_from_args(["a.comp"]), Some("a.comp".to_string()));
+    }
+
+    #[test]
+    fn a_path_that_arrives_quoted_or_verbatim_is_still_a_path() {
+        // The shell quotes a path with spaces, and a Windows path handed to a process can carry the
+        // verbatim prefix. Both belong to the argument, not to the path.
+        assert_eq!(
+            comp_path_from_args([r#""C:\My Work\A Poster.comp""#]),
+            Some(r"C:\My Work\A Poster.comp".to_string())
+        );
+        assert_eq!(
+            comp_path_from_args([r"\\?\C:\Work\Poster.comp"]),
+            Some(r"C:\Work\Poster.comp".to_string())
+        );
+    }
+
+    #[test]
+    fn nothing_to_open_answers_none() {
+        assert_eq!(comp_path_from_args(["Compositor.exe"]), None);
+        // A `.comp` is a folder with a five-character extension; a name too short to hold one is a
+        // flag or a typo, not a project.
+        assert_eq!(comp_path_from_args(["--comp"]), None);
+        assert_eq!(comp_path_from_args([".comp"]), None);
+        // The extension decides, whatever its case.
+        assert_eq!(comp_path_from_args([r"C:\Work\Poster.COMP"]), Some(r"C:\Work\Poster.COMP".to_string()));
+        assert_eq!(comp_path_from_args([r"C:\Work\poster.composite"]), None);
+    }
 }
