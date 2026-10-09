@@ -86,12 +86,16 @@ than one that says it cannot be opened.
   commercial use and so is incompatible with this one.
 - **The Type tool.** Type layers round-trip; nothing edits them in the canvas yet.
 - **Layer comps, smart objects, video, and 3D.**
-- **A thumbnail in the file manager.** Explorer's thumbnail provider has to be a COM DLL, and a
-  thumbnail has to be *composited* — 24 blend modes, twelve adjustments, masks, effects. Either that
-  maths is written a third time in Rust (there are already two copies, TypeScript and WGSL, kept in
-  step by a test that reads the real shader) or the provider shells out to the app's own renderer,
-  which starts a webview for every file the file manager looks at. Neither is a good trade yet, so a
-  `.comp` shows the app's icon, which is what it showed before.
+- **A thumbnail in the file manager.** The drawing half is here: `Compositor.exe --thumbnail
+  <project> <png> [size]` renders a project through the renderer everything else uses and writes a
+  PNG, in a window it never shows — one copy of the blend maths, no drift. What is missing is the
+  *shell* half, and it is missing for a platform reason rather than for want of code: a `.comp` is a
+  folder, and Windows has no per-extension thumbnail path for a folder. `IThumbnailProvider` is
+  initialised from a *file* stream, which a directory does not have; the two ways around it are to
+  write a `desktop.ini` with a `CLSID2` into every project — which changes what a package contains,
+  and the format is shared with the macOS app — or to register a folder-wide icon handler in
+  `HKCR\Folder\ShellEx`, which is a key other applications use and would be taken from them. Neither
+  is chosen yet, so a `.comp` shows the app's icon.
 
 ## Status
 
@@ -151,6 +155,11 @@ The other scripts:
 clipping mask and a layer mask. `scripts/dev-browser.mjs` starts a **headless** Chrome with remote
 debugging and a software Vulkan device, which is how interface changes here were checked — it never
 takes the foreground.
+
+**`Compositor.exe --thumbnail <project> <png> [size]`** draws one project as a PNG and exits, in a
+window it never shows. The file manager's thumbnail is what it is for, and drawing a picture this way
+is also the only way to see what the *desktop* build renders without a screen — which is how a scope
+that refused every layer's pixels was found, after every browser-side test had passed.
 
 ### Languages
 
