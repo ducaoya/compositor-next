@@ -42,9 +42,10 @@ either editor opens in the other.
   (uncompressed, PackBits, LZW and Deflate), and exporting a flattened PNG or JPEG.
 - **Hue/Saturation's colour-range bands** — the six ranges Photoshop has, each with its own hue,
   saturation and lightness and its own band edges.
-- **Undo throughout, one step per gesture** — for the document: layers, the layer tree, transforms,
-  adjustments, effects and selections. Painted pixels are not in the stack yet, which
-  [Not yet](#not-yet) is honest about.
+- **Undo throughout, one step per gesture** — the document *and* the pixels. A brush stroke, a
+  retouch, a filter, a liquify, a fill, a mask edit, a crop or a merge all come back, because the
+  pixels a step touched are snapshotted with the step. The pixel history is capped in bytes rather
+  than in steps (192 MB), and it drops whole steps when it fills — never half of one.
 - **Nothing unsaved is lost to a crash.** While a document has changes that are not on disk it is
   snapshotted into the app's data folder — once the editing has stopped, and at most once every
   thirty seconds — and the next start offers whatever it finds. Saving a recovered document writes
@@ -91,11 +92,6 @@ than one that says it cannot be opened.
   step by a test that reads the real shader) or the provider shells out to the app's own renderer,
   which starts a webview for every file the file manager looks at. Neither is a good trade yet, so a
   `.comp` shows the app's icon, which is what it showed before.
-- **Undoing a brush stroke.** The history holds whole-document *manifest* snapshots, so undo covers
-  the layer tree, the transforms, the adjustments and the effects, and not the pixels a brush, a
-  retouch tool, a filter or Liquify wrote: a stroke records its step and the surface has no past.
-  Until it does, the escape from a bad stroke is the document itself — close it without saving and it
-  opens as it was — and Liquify, which can be un-deformed while the tool is in hand.
 
 ## Status
 
@@ -120,7 +116,7 @@ Four things are here that the plan did not call for, because the port turned out
 and TIFF import, mip chains for both of the frame's downsamples, and the retouch tools beyond clone
 stamp and spot healing — Blur, Sharpen, Smudge, Dodge, Burn and Sponge.
 
-**Where it stands:** version 0.1.0, with 334 TypeScript tests, 43 Rust tests, and 28 pixel cases that
+**Where it stands:** version 0.1.0, with 341 TypeScript tests, 43 Rust tests, and 31 pixel cases that
 drive a real build in headless Chrome. `pnpm check` runs the first two; the pixel cases need a dev
 server and `scripts/dev-browser.mjs`, which [docs/architecture.md](docs/architecture.md) explains.
 

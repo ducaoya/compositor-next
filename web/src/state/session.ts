@@ -88,6 +88,7 @@ import {
   type BrushSettings,
   type CompositeLayer,
   type LayerSurface,
+  type SurfaceKind,
 } from '../render/paint'
 import {
   RetouchStroke,
@@ -204,7 +205,7 @@ interface DocumentRecord {
   project: OpenedProject
   manifest: Manifest
   view: ViewState
-  history: EditHistory<Manifest>
+  history: EditHistory<Manifest, PixelSnapshot[]>
   selection: Selection | null
   maskEditing: boolean
   activeLayerId: string | null
@@ -561,16 +562,129 @@ const gradient = reactive({
 const shape = reactive({ kind: 'rectangle' as 'rectangle' | 'ellipse', filled: true, lineWidth: 8 })
 const wandContiguous = ref(true)
 
-// `structuredClone` refuses a Vue proxy, and the document is JSON by definition, so the history
-// snapshots are taken the same way the format serializes them.
+/**
+ * One surface's pixels as they were, or the fact that it was not there at all.
+ *
+ * The size travels with the pixels because a step can change it: a crop rebuilds every surface at a
+ * new size, and undoing one has to put the old geometry back, not just its bytes.
+ */
+interface PixelSnapshot {
+  layerId: string
+  kind: SurfaceKind
+  width: number
+  height: number
+  /** Null when the surface did not exist, which undo puts back by disposing it again. */
+  data: Uint8ClampedArray | null
+}
+
+/**
+ * How many bytes of pixel snapshots the stack holds.
+ *
+ * The manifest stack is two hundred steps because a manifest is JSON and two hundred of them are
+ * nearly free. Pixels are not: two thousand by fifteen hundred is twelve megabytes a step, and four
+ * thousand square is sixty-four. This sits at roughly three of the large ones and sixteen of the
+ * common ones — enough that a stroke can be taken back several times in a row, and small enough that
+ * painting on a large document does not double its memory.
+ */
+const HISTORY_PIXEL_BYTES = 192 * 1024 * 1024
+
+/** What a step's worth of pixels costs, for the history's own budget. */
+function pixelsBytes(pixels: readonly PixelSnapshot[]): number {
+  let total = 0
+  for (const snapshot of pixels) total += snapshot.data?.byteLength ?? 0
+  return total
+}
+
+/** A snapshot of one surface, or of the fact that it is not there. */
+function snapshotsOf(layerId: string, kind: SurfaceKind): PixelSnapshot[] {
+  const surface = paintStore.surface(layerId, kind)
+  if (!surface) return [{ layerId, kind, width: 0, height: 0, data: null }]
+  const image = surface.context.getImageData(0, 0, surface.width, surface.height)
+  return [
+    {
+      layerId,
+      kind,
+      width: surface.width,
+      height: surface.height,
+      // Copied: the canvas's array is live, and the point of this is that it stops changing.
+      data: new Uint8ClampedArray(image.data),
+    },
+  ]
+}
+
+/** Every surface, for the steps that rebuild the whole document — a crop, a resize, a flip, a merge. */
+function snapshotsOfAll(): PixelSnapshot[] {
+  return paintStore.allSurfaces().map(([key, surface]) => {
+    const [layerId, kind] = key.split('|')
+    const image = surface.context.getImageData(0, 0, surface.width, surface.height)
+    return {
+      layerId,
+      kind: kind as SurfaceKind,
+      width: surface.width,
+      height: surface.height,
+      data: new Uint8ClampedArray(image.data),
+    }
+  })
+}
+
+/**
+ * The same surfaces as a snapshot names, as they are now — which is what a redo comes back to.
+ *
+ * A surface named here that has since gone is recorded as absent, because that is what redoing the
+ * step would have to reproduce.
+ */
+function snapshotLike(like: readonly PixelSnapshot[] | null): PixelSnapshot[] | null {
+  if (!like) return null
+  return like.flatMap((snapshot) => snapshotsOf(snapshot.layerId, snapshot.kind))
+}
+
+/**
+ * Puts snapshots back into the paint store.
+ *
+ * A surface that was not there is disposed, one that has gone is rebuilt at the size it had, and one
+ * that is the wrong size is rebuilt too — a crop is exactly that case. Everything restored is marked
+ * as modified, so a save re-encodes it, and as versioned, so the layer effects over it are rebuilt.
+ */
+function restoreSnapshots(pixels: readonly PixelSnapshot[]): void {
+  for (const snapshot of pixels) {
+    const key = assetKey(snapshot.layerId, snapshot.kind)
+    if (!snapshot.data) {
+      paintStore.dispose(snapshot.layerId, snapshot.kind)
+      surfaceVersion.set(key, (surfaceVersion.get(key) ?? 0) + 1)
+      continue
+    }
+    let surface = paintStore.surface(snapshot.layerId, snapshot.kind)
+    if (!surface || surface.width !== snapshot.width || surface.height !== snapshot.height) {
+      const canvas = new OffscreenCanvas(snapshot.width, snapshot.height)
+      if (!canvas.getContext('2d')) continue
+      surface = paintStore.createFromCanvas(snapshot.layerId, canvas, snapshot.kind) ?? undefined
+      if (!surface) continue
+    }
+    surface.context.putImageData(
+      new ImageData(snapshot.data as ImageDataArray, snapshot.width, snapshot.height),
+      0,
+      0,
+    )
+    surface.dirty = { x: 0, y: 0, width: snapshot.width, height: snapshot.height }
+    if (snapshot.kind === 'image') {
+      layerImages.set(snapshot.layerId, { width: snapshot.width, height: snapshot.height })
+    }
+    modifiedSurfaces.add(key)
+    surfaceVersion.set(key, (surfaceVersion.get(key) ?? 0) + 1)
+  }
+  schedulePaintFlush()
+}
+
 /**
  * `structuredClone` refuses a Vue proxy, and the document is JSON by definition, so the history
  * snapshots are taken the same way the format serializes them.
  */
-function newHistory(): EditHistory<Manifest> {
-  return new EditHistory<Manifest>({
+function newHistory(): EditHistory<Manifest, PixelSnapshot[]> {
+  return new EditHistory<Manifest, PixelSnapshot[]>({
     limit: 200,
-    clone: ((state: Manifest) => JSON.parse(JSON.stringify(state))) as <S>(state: S) => S,
+    byteLimit: HISTORY_PIXEL_BYTES,
+    bytesOf: pixelsBytes,
+    clone: (state: Manifest) => JSON.parse(JSON.stringify(state)) as Manifest,
   })
 }
 
@@ -679,6 +793,7 @@ export function useSession() {
     maskEditing: maskEditingRef,
     mergeTitle,
     canMergeDown,
+    setVisible,
     mergeLayers,
     mergeDown,
     copyMerged,
@@ -834,10 +949,21 @@ function bumpHistory() {
  * `body` mutates `manifest.value` in place and reports whether anything changed; a body that
  * reports false — a slider dragged back to where it started — leaves no trace in the stack.
  */
-function edit(label: string, body: (manifest: Manifest) => boolean | void): boolean {
+function edit(
+  label: string,
+  body: (manifest: Manifest) => boolean | void,
+  /**
+   * The pixels before this step, for the steps that change any.
+   *
+   * A thunk rather than a value, and taken here rather than by the caller, so the one place that
+   * knows the step is starting is also the one place that decides whether to copy any pixels — and
+   * a manifest-only edit copies none.
+   */
+  pixels?: () => PixelSnapshot[],
+): boolean {
   const current = manifest.value
   if (!current) return false
-  history.begin(label, current)
+  history.begin(label, current, pixels ? pixels() : null)
   const changed = body(current)
   if (changed === false) {
     history.cancel()
@@ -942,21 +1068,42 @@ export function endEdit(): void {
 export function undo(): void {
   const current = manifest.value
   if (!current) return
-  const restored = history.undo(current)
-  if (!restored) return
-  manifest.value = restored
-  markChanged()
-  bumpHistory()
+  // The pixels as they are now are what a redo has to come back to, and which surfaces those are is
+  // what the step being left says it touched — so they are captured on the way in.
+  const now = snapshotLike(history.nextUndoAttachment)
+  const step = history.undo(current, now)
+  if (!step) return
+  applyStep(step)
 }
 
 export function redo(): void {
   const current = manifest.value
   if (!current) return
-  const restored = history.redo(current)
-  if (!restored) return
-  manifest.value = restored
+  const now = snapshotLike(history.nextRedoAttachment)
+  const step = history.redo(current, now)
+  if (!step) return
+  applyStep(step)
+}
+
+/**
+ * Puts a step's document and its pixels back.
+ *
+ * The manifest is the structure and the surfaces are the pixels, so an undo is both: the saved pixels
+ * go back into their surfaces, a surface that did not exist is dropped again, and one that has gone —
+ * a crop threw the old shape away — is rebuilt at the size it had.
+ */
+function applyStep(step: { state: Manifest; attachment: PixelSnapshot[] | null }): void {
+  if (step.attachment) restoreSnapshots(step.attachment)
+  manifest.value = step.state
+  // A crop or a canvas resize changes the document's own size, and the frame is drawn at it.
+  composerDocumentSize(step.state)
   markChanged()
   bumpHistory()
+}
+
+/** Hands the frame the document's size, for the steps that change it. */
+function composerDocumentSize(current: Manifest): void {
+  compositor.value?.setDocumentSize(current.width, current.height)
 }
 
 // MARK: - Opening and saving
@@ -1851,7 +1998,7 @@ export function beginStroke(x: number, y: number, extendFromLast = false): void 
   const [lx, ly] = documentToLayer(layer, x, y)
   const radius = (brush.size / 2) / layerPixelScale(layer)
 
-  history.begin(kind === 'mask' ? 'Paint Mask' : 'Brush', manifest.value!)
+  history.begin(kind === 'mask' ? 'Paint Mask' : 'Brush', manifest.value!, snapshotsOf(layer.id, kind))
   // A layer that had no pixels now has some, which is what makes it save.
   if (kind === 'image' && !layer.imageFile) layer.imageFile = doc.imageFileName(layer.id)
   if (kind === 'image') layerImages.set(layer.id, { width: surface.width, height: surface.height })
@@ -2060,7 +2207,7 @@ export function beginRetouch(x: number, y: number, altHeld: boolean): boolean {
   retouchLayer = layer.id
   retouchSurface = surface
 
-  history.begin(retouchName(kind), manifest.value!)
+  history.begin(retouchName(kind), manifest.value!, snapshotsOf(layer.id, 'image'))
   if (!layer.imageFile) layer.imageFile = doc.imageFileName(layer.id)
   layerImages.set(layer.id, { width: surface.width, height: surface.height })
   modifiedSurfaces.add(assetKey(layer.id, 'image'))
@@ -2183,7 +2330,7 @@ export function beginLiquify(x: number, y: number): boolean {
 
   const [px, py] = documentToLayer(layer, x, y)
   liquifyInStroke = true
-  history.begin(t('tools.liquify'), manifest.value!)
+  history.begin(t('tools.liquify'), manifest.value!, snapshotsOf(layer.id, 'image'))
   if (!layer.imageFile) layer.imageFile = doc.imageFileName(layer.id)
   layerImages.set(layer.id, { width: surface.width, height: surface.height })
   modifiedSurfaces.add(assetKey(layer.id, 'image'))
@@ -2239,7 +2386,7 @@ export function contentAwareFill(): void {
   const surface = ensureSurface(layer, 'image')
   const coverage = selectionCoverage(layer, surface.width, surface.height)
   if (!coverage) return
-  history.begin(t('menu.contentAwareFill'), manifest.value!)
+  history.begin(t('menu.contentAwareFill'), manifest.value!, snapshotsOf(layer.id, 'image'))
   if (!layer.imageFile) layer.imageFile = doc.imageFileName(layer.id)
   layerImages.set(layer.id, { width: surface.width, height: surface.height })
   modifiedSurfaces.add(assetKey(layer.id, 'image'))
@@ -2407,7 +2554,7 @@ export function applyFilter(kind: FilterKind): void {
     }
   }
 
-  history.begin(t(FILTER_LABELS[kind]), manifest.value!)
+  history.begin(t(FILTER_LABELS[kind]), manifest.value!, snapshotsOf(layer.id, 'image'))
   if (!layer.imageFile) layer.imageFile = doc.imageFileName(layer.id)
   layerImages.set(layer.id, { width: surface.width, height: surface.height })
   modifiedSurfaces.add(assetKey(layer.id, 'image'))
@@ -2495,7 +2642,7 @@ export function fillLayer(color: { r: number; g: number; b: number } | null): vo
     if (kind === 'image') layerImages.set(record.id, { width: surface.width, height: surface.height })
     fillSurface(surface, color, currentSelectionClip(record))
     return true
-  })
+  }, () => snapshotsOf(layer.id, kind))
   modifiedSurfaces.add(assetKey(layer.id, kind))
   schedulePaintFlush()
 }
@@ -2539,7 +2686,7 @@ export function addLayerMask(): void {
     record.maskFile = doc.maskFileName(record.id)
     record.maskEnabled = true
     return true
-  })
+  }, () => snapshotsOf(layer.id, 'mask'))
   maskEditing.value = true
   const surface = paintStore.ensure(layer.id, size.width, size.height, 'mask')
   surface.dirty = { x: 0, y: 0, width: surface.width, height: surface.height }
@@ -2556,7 +2703,7 @@ export function removeLayerMask(): void {
     delete record.maskFile
     delete record.maskEnabled
     return true
-  })
+  }, () => snapshotsOf(layer.id, 'mask'))
   paintStore.dispose(layer.id, 'mask')
   textures.delete(assetKey(layer.id, 'mask'))
   modifiedSurfaces.delete(assetKey(layer.id, 'mask'))
@@ -2648,7 +2795,7 @@ export function drawGradient(from: [number, number], to: [number, number]): void
       ? { ...foreground }
       : { ...background }
 
-  history.begin('Gradient', manifest.value!)
+  history.begin('Gradient', manifest.value!, snapshotsOf(layer.id, paintTarget()))
   const context = surface.context
   context.save()
   if (clip?.maskCanvas) {
@@ -2708,7 +2855,7 @@ export function drawShape(from: [number, number], to: [number, number], filled: 
   const height = Math.abs(b[1] - a[1])
   if (width < 1 || height < 1) return
 
-  history.begin('Shape', manifest.value!)
+  history.begin('Shape', manifest.value!, snapshotsOf(layer.id, paintTarget()))
   const context = surface.context
   context.save()
   applyClipForFill(context, clip)
@@ -2900,7 +3047,7 @@ function mergeInto(ids: readonly string[], name: string, label: string): void {
       if (layer.maskSourceID && doomed.has(layer.maskSourceID)) delete layer.maskSourceID
     }
     return true
-  })
+  }, snapshotsOfAll)
 
   const surface = surfaceFromCanvas(top.id, canvas)
   if (surface) {
@@ -3034,7 +3181,7 @@ export function resizeCanvas(width: number, height: number, anchor: 'topLeft' | 
       guide.position += guide.axis === 'vertical' ? dx : dy
     }
     return true
-  })
+  }, snapshotsOfAll)
   compositor.value?.setDocumentSize(width, height)
   clearSelection()
   fit()
@@ -3070,7 +3217,7 @@ export function resizeImage(width: number, height: number): void {
     manifestNow.width = width
     manifestNow.height = height
     return true
-  })
+  }, snapshotsOfAll)
   resizeCanvasPixels(width, height)
   schedulePaintFlush()
   fit()
@@ -3105,7 +3252,7 @@ export function cropTo(x: number, y: number, width: number, height: number): voi
       guide.position -= guide.axis === 'vertical' ? left : top
     }
     return true
-  })
+  }, snapshotsOfAll)
   resizeCanvasPixels(w, h)
   fit()
 }
@@ -3152,7 +3299,7 @@ export function flipCanvas(horizontally: boolean): void {
       else transform.origin[1] = manifestNow.height - oy - h
     }
     return true
-  })
+  }, snapshotsOfAll)
 }
 
 // MARK: - Mask operations
@@ -4035,7 +4182,6 @@ if (typeof window !== 'undefined') {
       watchProject,
       addAdjustment,
       selectLayer,
-    setVisible,
       renderAndRead,
       renderAndReadView,
       pauseRender,

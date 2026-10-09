@@ -205,21 +205,39 @@ the document drops it, because a mesh is a warp of one particular picture. `mark
 that is decided, with one flag for the single exception: the liquify stroke's own undo step, which
 goes through there at the end of the stroke it just made.
 
-## What undo holds, and what it does not
+## What the history holds
 
-The history is whole-document snapshots of the **manifest** — the layer tree, the transforms, the
-adjustments, the effects, the selections. That is what makes an edit like "delete a folder with
-twelve clipped children" trivially reversible, and why an edit is `begin` … `commit` with nothing to
-invert.
+The history is whole-document snapshots, and a snapshot is two things. The **manifest** — the layer
+tree, the transforms, the adjustments, the effects, the selections — is what makes an edit like
+"delete a folder with twelve clipped children" trivially reversible, and it is JSON, so two hundred
+steps of it cost nothing. The **pixels** a step touched live in the paint store beside it, and they
+are the part with a budget: a layer is four bytes a pixel, so two thousand by fifteen hundred is
+12 MB a step and four thousand square is 64 MB.
 
-Pixels are not in it. A brush stroke, a retouch stroke, a filter and a liquify all record their step
-and mark the surface as needing re-encoding, but the surface itself has no past: undo restores the
-document *around* the pixels and leaves them where they were put. That is a real gap rather than a
-decision — driving the built app found it: a layer blurred, undone, measured, still blurred.
-Closing it means snapshotting the surfaces a step touched, which is a memory question before it is a
-bookkeeping one. Until then the escape from a bad stroke is the document itself — close it without
-saving and it opens as it was — and Liquify is the one tool with an answer inside it, because a mesh
-can be pulled back.
+So the two are capped differently, and the byte budget evicts **whole steps**, oldest first. A step
+whose pixels were thrown away but whose manifest was kept would undo into a document that no longer
+matches its own pixels — worse than an undo that cannot be taken. The newest step is kept even when
+it alone is over budget: a crop of a large document costs one snapshot of every surface, and
+dropping it would leave an edit that cannot be taken back at all.
+
+Three details are worth knowing when touching this:
+
+- **A step that carries an attachment counts as a change**, whatever the manifest says. A filter or a
+  brush stroke usually leaves the document's structure exactly as it was, so a commit that compared
+  manifests dropped the step — and with it the only record of what the pixels used to be. That bug
+  is why "filters are not undoable" looked like a missing feature for so long; it was a missing
+  record.
+- **A snapshot carries its surface's size**, because a step can change it. A crop rebuilds every
+  surface at a new shape, and undoing one has to put the geometry back, not just the bytes: the
+  surface is rebuilt at the recorded size, and the frame is told the document's size again.
+- **`undo` is handed the pixels as they are now**, before it pops anything, because that is what a
+  redo has to come back to. Which surfaces those are is the step being left's own business — it named
+  them when it started — so `EditHistory` answers `nextUndoAttachment` without happening, and the
+  session snapshots exactly those.
+
+What this does not do is undo *outside* the history: a tool that changes pixels without an open step
+is not recorded, and something that edits the surface from the side — a reload from disk — drops the
+liquify session that was holding a warp of it.
 
 ## GPU failures are silent by default
 

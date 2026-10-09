@@ -1328,18 +1328,129 @@ const CASES = [
       await drag('reconstruct', [460, 580], [520, 580], 6)
       const rebuilt = await s.renderAndRead()
 
+      // A liquify stroke is one undo step like any other, snapshot and all — and undoing one has to
+      // drop the session as well, or the next dab would re-apply the mesh the undo just took back.
+      await drag('push', [480, 580], [520, 580], 5)
+      const pushedAgain = await s.renderAndRead()
+      s.undo()
+      await wait(900)
+      const afterUndo = await s.renderAndRead()
+      const leftAfterUndo = changed(rebuilt, afterUndo)
+
       s.brush.size = 32
       const pushedPixels = changed(before, pushed)
       const leftAfterReconstruct = changed(before, rebuilt)
       const centre = differenceCentre(before, pushed, 380, 480, 220, 160)
       return {
-        pass: pushedPixels > 2000 && centre > 484 && leftAfterReconstruct < pushedPixels * 0.25,
+        pass: pushedPixels > 2000 && centre > 484 && leftAfterReconstruct < pushedPixels * 0.25
+          && changed(rebuilt, pushedAgain) > 2000 && leftAfterUndo === 0,
         detail: {
           layer: bars.name,
           pushedPixels,
           differentAfterReconstruct: leftAfterReconstruct,
+          pixelsDifferentAfterUndo: leftAfterUndo,
           centreOfWhatMoved: Math.round(centre),
           pointerWentFrom: 480,
+        },
+      }
+    })()`,
+  },
+
+  {
+    name: 'undo puts the pixels back, and redo puts them back again',
+    // The history held manifest snapshots and nothing else, so a blur could be taken back only in
+    // the document's structure: the pixels stayed blurred. What this measures is the pixels, twice:
+    // an undo that restores them exactly, and a redo that puts the change back.
+    probe: `(async () => { ${PRELUDE}
+      await freshDocument()
+      const background = s.manifest.layers[0]
+      for (const layer of s.manifest.layers) s.setVisible(layer.id, layer.id === background.id)
+      s.selectLayer(background.id)
+      await wait(600)
+
+      const before = await s.renderAndRead()
+      const clean = roughness(before, 300, 60)
+
+      s.filterSettings.blur.radius = 40
+      s.applyFilter('blur')
+      await wait(900)
+      const smoothed = roughness(await s.renderAndRead(), 300, 60)
+
+      s.undo()
+      await wait(900)
+      const undone = await s.renderAndRead()
+      const back = roughness(undone, 300, 60)
+
+      s.redo()
+      await wait(900)
+      const again = roughness(await s.renderAndRead(), 300, 60)
+
+      return {
+        pass: smoothed < clean * 0.6
+          && changed(before, undone) === 0
+          && again < clean * 0.6,
+        detail: {
+          roughness: { before: Math.round(clean * 100) / 100, blurred: Math.round(smoothed * 100) / 100, afterUndo: Math.round(back * 100) / 100, afterRedo: Math.round(again * 100) / 100 },
+          pixelsDifferentAfterUndo: changed(before, undone),
+        },
+      }
+    })()`,
+  },
+
+  {
+    name: 'undo puts a crop back, geometry and all',
+    // A crop is the case a manifest-only undo got most wrong: the document goes back to the old size
+    // while every surface is the new one, so the picture comes back cropped and squashed. This checks
+    // the size the frame reports *and* that the pixels are the ones from before the crop.
+    probe: `(async () => { ${PRELUDE}
+      await freshDocument()
+      const before = await s.renderAndRead()
+
+      s.cropTo(120, 90, 400, 300)
+      await wait(900)
+      const cropped = await s.renderAndRead()
+
+      s.undo()
+      await wait(900)
+      const undone = await s.renderAndRead()
+
+      return {
+        pass: cropped.width === 400 && cropped.height === 300
+          && undone.width === before.width && undone.height === before.height
+          && changed(before, undone) === 0,
+        detail: {
+          before: [before.width, before.height],
+          cropped: [cropped.width, cropped.height],
+          afterUndo: [undone.width, undone.height],
+          pixelsDifferentAfterUndo: changed(before, undone),
+        },
+      }
+    })()`,
+  },
+
+  {
+    name: 'undo puts a brush stroke back',
+    // The stroke path takes its snapshot when the stroke starts, so the pixels the brush worked from
+    // are also the pixels an undo puts back — one step, however many dabs it took.
+    probe: `(async () => { ${PRELUDE}
+      const before = await baseFrame()
+      const { rect, score } = roughestRect(before, 40)
+      if (score < 1) return { pass: false, detail: { error: 'the fixture has no detail to soften', score } }
+      setBrush(80, 1, 1)
+      await stroke('blur', [centreOf(rect)])
+      const after = await s.renderAndRead()
+      const smoothed = rectRoughness(after, rect)
+
+      s.undo()
+      await wait(900)
+      const undone = await s.renderAndRead()
+
+      return {
+        pass: smoothed < score * 0.7 && changed(before, undone) === 0,
+        detail: {
+          roughnessBefore: Math.round(score * 100) / 100,
+          roughnessAfterStroke: Math.round(smoothed * 100) / 100,
+          pixelsDifferentAfterUndo: changed(before, undone),
         },
       }
     })()`,
