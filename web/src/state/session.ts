@@ -2855,6 +2855,7 @@ if (typeof window !== 'undefined') {
       reloadFromDisk,
       watchProject,
       addAdjustment,
+      selectLayer,
       renderAndRead,
       pauseRender,
       resumeRender,

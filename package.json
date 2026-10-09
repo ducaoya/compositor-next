@@ -11,7 +11,8 @@
     "test": "pnpm --dir web test",
     "tauri": "tauri",
     "app": "tauri dev",
-    "check": "cargo test --workspace && pnpm --dir web test"
+    "check": "cargo test --workspace && pnpm --dir web test",
+    "test:gpu": "node scripts/gpu-test.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

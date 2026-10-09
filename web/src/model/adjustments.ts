@@ -360,12 +360,15 @@ export interface RangeAdjustment {
 function rangeAdjustments(adjustment: LayerAdjustment): Partial<Record<ColorRange, RangeAdjustment>> {
   const fromSettings = adjustment.hsvSettings?.adjustments
   if (fromSettings && Object.keys(fromSettings).length > 0) return fromSettings
-  // Without per-range settings, the flat hue/saturation/lightness on the adjustment is the master.
+  // Without per-range settings, the master values are the master. `hsvSettings` wins over the flat
+  // fields, which is the precedence `packAdjustment` uses — reading the flat ones here meant the
+  // panel's hue and saturation were written into the uniform and then ignored by the table, so the
+  // adjustment looked like it did nothing.
   return {
     master: {
-      hue: adjustment.hue ?? 0,
-      saturation: adjustment.saturation ?? 0,
-      lightness: adjustment.lightness ?? 0,
+      hue: adjustment.hsvSettings?.hue ?? adjustment.hue ?? 0,
+      saturation: adjustment.hsvSettings?.saturation ?? adjustment.saturation ?? 0,
+      lightness: adjustment.hsvSettings?.lightness ?? adjustment.lightness ?? 0,
     },
   }
 }
