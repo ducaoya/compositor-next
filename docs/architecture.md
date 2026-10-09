@@ -187,6 +187,40 @@ Only overrides are stored in local storage, never the resolved map: a default ch
 then reaches someone who has rebound something else, instead of being pinned to what the default used
 to be.
 
+### Liquify
+
+Liquify is a mesh rather than a per-pixel displacement map, and that decides three things. A
+4,000 × 4,000 layer would want 128 MB of floats for a field, and a field changes as fast as a brush
+moves, where a 16-pixel grid is a few hundred kilobytes and is smooth by construction. The mesh holds
+a **backward** map — where each pixel reads from — because that is the direction a resampler asks
+in, which is why a drag from A to B *subtracts* its own offset rather than adding it.
+
+And the session keeps the picture from before its **first** dab rather than the layer's current
+pixels, because the mesh accumulates: warping the last stroke's output through the mesh again is a
+smear of a smear, which is the same mistake the retouch strokes avoid by sampling once at the start.
+Keeping that picture is also what gives Reconstruct something to mean — it pulls the mesh back
+towards rest and the picture comes back with it — and it is why leaving the tool bakes the
+deformation: the session lives as long as the tool is in hand on one layer, and any other change to
+the document drops it, because a mesh is a warp of one particular picture. `markChanged` is where
+that is decided, with one flag for the single exception: the liquify stroke's own undo step, which
+goes through there at the end of the stroke it just made.
+
+## What undo holds, and what it does not
+
+The history is whole-document snapshots of the **manifest** — the layer tree, the transforms, the
+adjustments, the effects, the selections. That is what makes an edit like "delete a folder with
+twelve clipped children" trivially reversible, and why an edit is `begin` … `commit` with nothing to
+invert.
+
+Pixels are not in it. A brush stroke, a retouch stroke, a filter and a liquify all record their step
+and mark the surface as needing re-encoding, but the surface itself has no past: undo restores the
+document *around* the pixels and leaves them where they were put. That is a real gap rather than a
+decision — driving the built app found it: a layer blurred, undone, measured, still blurred.
+Closing it means snapshotting the surfaces a step touched, which is a memory question before it is a
+bookkeeping one. Until then the escape from a bad stroke is the document itself — close it without
+saving and it opens as it was — and Liquify is the one tool with an answer inside it, because a mesh
+can be pulled back.
+
 ## GPU failures are silent by default
 
 `Compositor.create` reads the shader's compilation info and wraps pipeline creation in a validation

@@ -49,13 +49,14 @@ function hex(): string {
 }
 
 /**
- * The tool's key, as it is bound right now.
+ * The tool's key, as it is bound right now, or the empty string when it has none.
  *
  * A tooltip that kept naming the key a tool shipped with would be worse than none: it would send
- * someone to press a key that does something else.
+ * someone to press a key that does something else. Liquify ships unbound, which is why the empty
+ * case is a real one and the tooltip leaves the brackets off rather than saying "Not set".
  */
 function keyFor(entry: ToolDefinition): string {
-  return shortcutFor(`tool.${entry.id}`) || t('shortcuts.cleared')
+  return shortcutFor(`tool.${entry.id}`)
 }
 </script>
 
@@ -69,7 +70,7 @@ function keyFor(entry: ToolDefinition): string {
           :disabled="!entry.implemented"
           :title="
             entry.implemented
-              ? `${t(entry.labelKey)} (${keyFor(entry)})`
+              ? t(entry.labelKey) + (keyFor(entry) ? ` (${keyFor(entry)})` : '')
               : t('tools.notInBuild', { tool: t(entry.labelKey) })
           "
           @click="choose(entry)"

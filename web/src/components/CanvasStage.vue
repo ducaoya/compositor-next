@@ -30,19 +30,23 @@ import {
   applyCrop,
   applySelectionMode,
   beginRetouch,
+  beginLiquify,
   cancelLasso,
   cloneSourcePoint,
   closeLasso,
   drawGradient,
   drawShape,
   endRetouch,
+  endLiquify,
   flushPaint,
   importDroppedFiles,
   isRetouchTool,
+  isLiquifyTool,
   layerMatrix,
   layerPixelSize,
   marqueeSelection,
   moveRetouch,
+  moveLiquify,
   panBy,
   setCloneSource,
   setCropRect,
@@ -204,6 +208,7 @@ type Drag =
   | { kind: 'shape'; start: [number, number]; current: [number, number] }
   | { kind: 'paint' }
   | { kind: 'retouch' }
+  | { kind: 'liquify' }
   | { kind: 'move'; layerId: string; startOrigin: [number, number]; startPointer: [number, number] }
   | {
       kind: 'transform'
@@ -383,7 +388,7 @@ const transformBox = computed(() => {
 const brushCursor = computed(() => {
   // The size-based tools all draw their own outline, because a CSS cursor cannot be a circle the
   // size of the tip. `cursorFor` returns `none` for exactly these, so the two have to agree.
-  if (tool.value !== 'brush' && tool.value !== 'eraser' && !isRetouchTool()) return null
+  if (tool.value !== 'brush' && tool.value !== 'eraser' && !isRetouchTool() && !isLiquifyTool()) return null
   const point = pointer.value
   if (!point) return null
   const diameter = Math.max(4, brush.size * view.zoom)
@@ -448,6 +453,12 @@ function onPointerDown(event: PointerEvent): void {
     // A stroke that cannot start — no source for Clone, a mask for anything — leaves the drag where
     // it was, so the press does nothing rather than opening a stroke with nothing behind it.
     if (beginRetouch(dx, dy, event.altKey)) drag = { kind: 'retouch' }
+    schedule()
+    return
+  }
+
+  if (isLiquifyTool()) {
+    if (beginLiquify(dx, dy)) drag = { kind: 'liquify' }
     schedule()
     return
   }
@@ -612,6 +623,10 @@ function onPointerMove(event: PointerEvent): void {
       moveRetouch(dx, dy)
       schedule()
       return
+    case 'liquify':
+      moveLiquify(dx, dy)
+      schedule()
+      return
     case 'move': {
       const current = manifest.value
       const record = current?.layers.find((item) => item.id === dragging.layerId)
@@ -719,6 +734,9 @@ function onPointerUp(event: PointerEvent): void {
       break
     case 'retouch':
       endRetouch()
+      break
+    case 'liquify':
+      endLiquify()
       break
     case 'marquee': {
       const drawn = marqueeSelection(drag.start, drag.current, drag.elliptical)

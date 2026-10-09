@@ -105,7 +105,16 @@
     "sharpen": "Sharpen",
     "smudge": "Smudge",
     "burn": "Burn",
-    "sponge": "Sponge"
+    "sponge": "Sponge",
+    "liquify": "Liquify"
+  },
+  "liquify": {
+    "push": "Push",
+    "twirlClockwise": "Twirl Clockwise",
+    "twirlCounter": "Twirl Counterclockwise",
+    "pucker": "Pucker",
+    "bloat": "Bloat",
+    "reconstruct": "Reconstruct"
   },
   "options": {
     "autoSelect": "Auto-Select",
@@ -149,6 +158,8 @@
     "fill": "Fill",
     "stroke": "Stroke",
     "strength": "Strength:",
+    "pressure": "Pressure:",
+    "liquifyHint": "Drag to deform this layer. Reconstruct pulls it back towards how it was, while the tool stays in hand.",
     "blurRadius": "Radius:",
     "aligned": "Aligned",
     "cloneSourceHint": "Alt-click to set the source",

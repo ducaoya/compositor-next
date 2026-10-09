@@ -95,6 +95,8 @@ import {
   type RetouchKind,
   type RetouchOptions,
 } from '../render/retouchStroke'
+import { LiquifySession, type LiquifyOptions } from '../render/retouch/liquifyStroke'
+import type { LiquifyMode } from '../render/retouch/liquify'
 import {
   addNoise,
   dither as ditherPixels,
@@ -160,6 +162,10 @@ let autosavedAt = Date.now()
 function markChanged(): void {
   dirty.value = true
   changedAt = Date.now()
+  // Anything that changes the document changes the pixels a liquify session is holding, and a mesh
+  // is a warp of one particular picture. The one exception is the liquify stroke itself, whose own
+  // undo step goes through here at the end of the stroke it just made.
+  if (!liquifyInStroke) forgetLiquify()
 }
 const compositor = shallowRef<Compositor | null>(null)
 const canRender = ref(false)
@@ -275,6 +281,7 @@ function stashActive(): void {
 
 /** Empties everything, for when the last tab closes. */
 function clearDocument(): void {
+  forgetLiquify()
   activeDocumentId.value = null
   project.value = null
   manifest.value = null
@@ -295,6 +302,7 @@ function clearDocument(): void {
 
 /** Reads a record out into the live refs, decoding its assets if they are not on the GPU yet. */
 async function restoreDocument(record: DocumentRecord, options: { fit?: boolean } = {}): Promise<void> {
+  forgetLiquify()
   activeDocumentId.value = record.id
   project.value = record.project
   manifest.value = record.manifest
@@ -333,6 +341,7 @@ export async function activateDocument(id: string): Promise<void> {
 
 /** Frees what a closed tab was holding: its textures and its paint surfaces. */
 function releaseDocument(record: DocumentRecord): void {
+  forgetLiquify()
   const target = compositor.value
   for (const layer of record.manifest.layers) {
     for (const kind of ['image', 'mask'] as const) {
@@ -695,6 +704,9 @@ export function useSession() {
     beginRetouch,
     moveRetouch,
     endRetouch,
+    liquifySettings,
+    LIQUIFY_MODES,
+    isLiquifyTool,
     cloneSourcePoint,
     setCloneSource,
     contentAwareFill,
@@ -872,6 +884,9 @@ export function resetColors(): void {
 /** Picks a tool, remembering where Alt-tabbing back to it should return. */
 export function selectTool(id: ToolId): void {
   if (tool.value === id) return
+  // The mesh belongs to the tool being in hand: leaving Liquify bakes the deformation into the
+  // layer and forgets the picture it was a warp of.
+  if (tool.value === 'liquify') forgetLiquify()
   previousTool.value = tool.value
   tool.value = id
   erasing.value = id === 'eraser'
@@ -985,6 +1000,9 @@ async function reloadFromDisk(): Promise<void> {
     message.value = t('message.externalChangeKept')
     return
   }
+  // The surfaces are about to be thrown away and read again, so any session holding one is holding
+  // a canvas nothing will draw.
+  forgetLiquify()
   try {
     const client = await backend()
     const fresh = await client.openProjectAt(opened.path)
@@ -1427,6 +1445,8 @@ function dropEntry(target: string): void {
 // MARK: - Layer actions
 
 export function selectLayer(id: string, additive = false): void {
+  // A liquify session is about one layer's pixels; another layer's are not the ones it holds.
+  if (id !== activeLayerId.value) forgetLiquify()
   activeLayerId.value = id
   if (additive) {
     selectedIds.value = selectedIds.value.includes(id)
@@ -1547,6 +1567,16 @@ export function toggleVisible(id: string): void {
     const layer = current.layers.find((record) => record.id === id)
     if (!layer) return false
     layer.isVisible = !layer.isVisible
+    return true
+  })
+}
+
+/** Shows or hides a layer outright, which is what the eye and the scripted checks both want. */
+export function setVisible(id: string, visible: boolean): void {
+  edit('Toggle Visibility', (current) => {
+    const layer = current.layers.find((record) => record.id === id)
+    if (!layer || layer.isVisible === visible) return false
+    layer.isVisible = visible
     return true
   })
 }
@@ -2062,6 +2092,48 @@ export function endRetouch(): void {
   schedulePaintFlush()
 }
 
+// MARK: - Liquify
+
+/** What the liquify options bar edits. */
+export const liquifySettings = reactive({
+  mode: 'push' as LiquifyMode,
+  /** How hard one dab pulls, in percent. Photoshop's Brush Pressure, in effect. */
+  pressure: 100,
+})
+
+/** The order the options bar offers them in: push first, as Photoshop does. */
+export const LIQUIFY_MODES: LiquifyMode[] = [
+  'push',
+  'twirlClockwise',
+  'twirlCounter',
+  'pucker',
+  'bloat',
+  'reconstruct',
+]
+
+/**
+ * The session in hand: the mesh, and the picture it is warping, while the tool is on one layer.
+ *
+ * Kept across strokes, which is what makes a deformation accumulate and what gives Reconstruct
+ * something to work on, and dropped the moment anything else changes the document — a mesh is a warp
+ * of one particular picture, and a picture that has moved on is one it cannot be warped from.
+ * `markChanged` is the one place that decides that.
+ */
+let liquifySession: { layerId: string; surface: LayerSurface; session: LiquifySession } | null = null
+/** True while a liquify stroke is running, which is the one change that must not drop the session. */
+let liquifyInStroke = false
+
+/** Whether Liquify is the tool in hand, which is what the canvas asks before a drag. */
+export function isLiquifyTool(): boolean {
+  return tool.value === 'liquify'
+}
+
+/** Forgets the session, for when the picture it was warping is no longer the one on screen. */
+export function forgetLiquify(): void {
+  liquifySession?.session.release()
+  liquifySession = null
+}
+
 /** The undo step's name, which is the tool's own name in the language packs. */
 function retouchName(kind: RetouchKind): string {
   const key: Record<RetouchKind, string> = {
@@ -2075,6 +2147,83 @@ function retouchName(kind: RetouchKind): string {
     heal: 'tools.heal',
   }
   return t(key[kind])
+}
+
+/** The liquify options, which both the first dab and every later one need. */
+function liquifyOptionsFor(layer: LayerRecord): LiquifyOptions {
+  const scale = layerPixelScale(layer)
+  return {
+    mode: liquifySettings.mode,
+    // The brush's size is a document-space diameter, and the pixels are the layer's, so a layer at
+    // half scale needs twice the radius — the same correction the retouch tools make.
+    radius: Math.max(0.5, brush.size / 2 / scale),
+    hardness: brush.hardness,
+    strength: Math.max(0.02, Math.min(1, liquifySettings.pressure / 100)),
+  }
+}
+
+/**
+ * Starts a liquify stroke, or reports that it cannot start.
+ *
+ * Nothing is sampled here: the session samples the layer once, on its first dab, and every later
+ * stroke warps that same picture through the same mesh. What happens here is the undo step — the
+ * manifest's, as for every other pixel tool — and the bookkeeping that says this layer's pixels will
+ * need re-encoding when the project is saved.
+ */
+export function beginLiquify(x: number, y: number): boolean {
+  const layer = paintableLayer()
+  if (!layer) return false
+  // Liquify moves pixels, and a mask has none of the colour a picture is made of.
+  if (maskEditing.value && layer.maskFile) return false
+  const surface = ensureSurface(layer, 'image')
+  if (!liquifySession || liquifySession.layerId !== layer.id || liquifySession.surface !== surface) {
+    forgetLiquify()
+    liquifySession = { layerId: layer.id, surface, session: new LiquifySession(surface) }
+  }
+
+  const [px, py] = documentToLayer(layer, x, y)
+  liquifyInStroke = true
+  history.begin(t('tools.liquify'), manifest.value!)
+  if (!layer.imageFile) layer.imageFile = doc.imageFileName(layer.id)
+  layerImages.set(layer.id, { width: surface.width, height: surface.height })
+  modifiedSurfaces.add(assetKey(layer.id, 'image'))
+  liquifySession.session.to([px, py], liquifyOptionsFor(layer))
+  surface.dirty = unionDirty(surface.dirty, liquifySession.session.dirty)
+  schedulePaintFlush()
+  return true
+}
+
+export function moveLiquify(x: number, y: number): void {
+  const held = liquifySession
+  const layer = held ? manifest.value?.layers.find((record) => record.id === held.layerId) : undefined
+  if (!held || !layer) return
+  const [px, py] = documentToLayer(layer, x, y)
+  held.session.to([px, py], liquifyOptionsFor(layer))
+  held.surface.dirty = unionDirty(held.surface.dirty, held.session.dirty)
+  schedulePaintFlush()
+}
+
+/**
+ * The end of a liquify stroke.
+ *
+ * The session stays, because the picture it holds is the one from before the *first* dab — which is
+ * what a later Reconstruct pulls the mesh back towards. A stroke that moved nothing leaves no undo
+ * step at all.
+ */
+export function endLiquify(): void {
+  const held = liquifySession
+  if (!held) {
+    liquifyInStroke = false
+    if (history.isEditing) historyCancel()
+    return
+  }
+  held.surface.dirty = unionDirty(held.surface.dirty, held.session.finish())
+  schedulePaintFlush()
+  if (history.isEditing) {
+    if (held.session.changed) endEdit()
+    else historyCancel()
+  }
+  liquifyInStroke = false
 }
 
 /**
@@ -3808,6 +3957,7 @@ if (typeof window !== 'undefined') {
       setForeground,
       nudgeActive,
       toggleVisible,
+      setVisible,
       get lassoPoints() {
         return lassoPoints.value
       },
@@ -3819,6 +3969,11 @@ if (typeof window !== 'undefined') {
       beginRetouch,
       moveRetouch,
       endRetouch,
+      beginLiquify,
+      moveLiquify,
+      endLiquify,
+      liquifySettings,
+      forgetLiquify,
       setCloneSource,
       contentAwareFill,
       filterSettings,
@@ -3880,6 +4035,7 @@ if (typeof window !== 'undefined') {
       watchProject,
       addAdjustment,
       selectLayer,
+    setVisible,
       renderAndRead,
       renderAndReadView,
       pauseRender,

@@ -10,7 +10,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import { TOOLS_BY_ID } from '../model/tools'
-import { fit, importImages, isRetouchTool, useSession, zoomTo } from '../state/session'
+import { fit, importImages, isLiquifyTool, isRetouchTool, useSession, zoomTo } from '../state/session'
 
 const { t } = useI18n()
 const {
@@ -25,6 +25,8 @@ const {
   shape,
   lassoPolygonal,
   retouch,
+  liquifySettings,
+  LIQUIFY_MODES,
 } = useSession()
 
 const label = computed(() => {
@@ -46,6 +48,8 @@ const tipStyle = computed(() => {
 const isBrush = computed(() => tool.value === 'brush' || tool.value === 'eraser')
 /** Spot Healing, Clone Stamp, and the smooth and tone groups: they share the tip and little else. */
 const isRetouch = computed(() => isRetouchTool())
+/** Liquify shares the tip and takes a mode, which is the whole of what it has to say. */
+const isLiquify = computed(() => isLiquifyTool())
 const isSmooth = computed(() => tool.value === 'blur' || tool.value === 'sharpen' || tool.value === 'smudge')
 const isTone = computed(() => tool.value === 'dodge' || tool.value === 'burn' || tool.value === 'sponge')
 /** The tones a dodge or burn brush reaches, which is Photoshop's Range menu. */
@@ -205,6 +209,31 @@ const MODES = [
           <input v-model.number="brush.opacity" type="number" min="0" max="1" step="0.01" />
         </label>
       </template>
+    </template>
+
+    <!-- Liquify: the tip, which of the six things it does, and how hard it pulls. -->
+    <template v-else-if="isLiquify">
+      <div class="options__tip" :title="t('options.brushTip', { size: Math.round(brush.size) })">
+        <span class="options__tip-dot" :style="tipStyle" />
+      </div>
+      <label class="options__number">
+        {{ t('options.size') }} <input v-model.number="brush.size" type="number" min="1" max="500" step="1" />
+        {{ t('common.px') }}
+      </label>
+      <label class="options__number">
+        {{ t('options.hardness') }} <input v-model.number="brush.hardness" type="number" min="0" max="1" step="0.01" />
+      </label>
+      <label class="options__select">
+        {{ t('options.mode') }}
+        <select v-model="liquifySettings.mode">
+          <option v-for="mode in LIQUIFY_MODES" :key="mode" :value="mode">{{ t(`liquify.${mode}`) }}</option>
+        </select>
+      </label>
+      <label class="options__number">
+        {{ t('options.pressure') }}
+        <input v-model.number="liquifySettings.pressure" type="number" min="1" max="100" step="1" /> %
+      </label>
+      <span class="options__hint">{{ t('options.liquifyHint') }}</span>
     </template>
 
     <!-- Magic Wand -->

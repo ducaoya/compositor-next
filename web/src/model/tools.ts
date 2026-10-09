@@ -24,6 +24,7 @@ export type ToolId =
   | 'dodge'
   | 'burn'
   | 'sponge'
+  | 'liquify'
   | 'gradient'
   | 'type'
   | 'shape'
@@ -236,6 +237,17 @@ export const TOOLS: ToolDefinition[] = [
       <path d="M6.5 5.5h11" />
       <circle cx="9" cy="13.2" r="1.1" />
       <circle cx="14.5" cy="14.8" r="1.1" />`,
+  },
+  {
+    id: 'liquify',
+    labelKey: 'tools.liquify',
+    // Photoshop has no key for Liquify — it is a dialog under the Filter menu there — and this build
+    // gives it none either. The shortcut sheet is where one can be given to it.
+    shortcut: '',
+    implemented: true,
+    icon: `
+      <path d="M4 8.5c3.2 0 3.2 7 6.4 7s3.2-7 9.6-7" />
+      <path d="M4 15.5c3.2 0 3.2-7 6.4-7s3.2 7 9.6 7" opacity=".55" />`,
   },
   {
     id: 'type',

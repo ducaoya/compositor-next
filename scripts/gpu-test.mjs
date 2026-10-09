@@ -1249,9 +1249,9 @@ const CASES = [
       const before = await freshDocument()
       const background = s.manifest.layers[0]
       // Everything above it is hidden, so what comes back is the layer the filter was applied to.
-      for (const layer of s.manifest.layers) {
-        if (layer.id !== background.id && layer.visible !== false) s.toggleVisible(layer.id)
-      }
+      // Set outright rather than toggled: a case that flips what the last case left would be
+      // measuring a document it did not choose.
+      for (const layer of s.manifest.layers) s.setVisible(layer.id, layer.id === background.id)
       await wait(600)
       const clean = await s.renderAndRead()
 
@@ -1277,6 +1277,69 @@ const CASES = [
           meanBefore: Math.round(meanBefore * 10) / 10,
           meanAfter: Math.round(meanAfter * 10) / 10,
           changed: changed(clean, after),
+        },
+      }
+    })()`,
+  },
+
+  {
+    name: 'liquify pushes the pixels where the pointer went, and reconstruct puts them back',
+    // Measured as a *difference*: where the picture changed, and which way. An absolute centre of
+    // brightness would be measuring whatever else the accumulation happens to hold — a document is
+    // composited, and a layer that has been hidden does not clear what it drew last frame.
+    probe: `(async () => { ${PRELUDE}
+      /** The centre of what differs, weighted by how much, over a box. */
+      const differenceCentre = (one, two, x0, y0, w, h) => {
+        let total = 0
+        let weight = 0
+        for (let y = y0; y < y0 + h; y += 1) for (let x = x0; x < x0 + w; x += 1) {
+          const i = (y * one.width + x) * 4
+          const moved = Math.abs(one.data[i] - two.data[i]) + Math.abs(one.data[i + 1] - two.data[i + 1]) + Math.abs(one.data[i + 2] - two.data[i + 2])
+          total += x * moved
+          weight += moved
+        }
+        return weight === 0 ? 0 : total / weight
+      }
+      const drag = async (mode, from, to, steps) => {
+        s.liquifySettings.mode = mode
+        s.beginLiquify(from[0], from[1])
+        for (let step = 1; step <= steps; step += 1) {
+          const t = step / steps
+          s.moveLiquify(from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t)
+          await wait(50)
+        }
+        s.endLiquify()
+        await wait(700)
+      }
+
+      await freshDocument()
+      const bars = s.manifest.layers[2]
+      for (const layer of s.manifest.layers) s.setVisible(layer.id, layer.id === bars.id)
+      await wait(600)
+      s.selectLayer(bars.id)
+      const before = await s.renderAndRead()
+
+      s.selectTool('liquify')
+      s.liquifySettings.pressure = 100
+      s.brush.size = 140
+      await drag('push', [480, 580], [520, 580], 5)
+      const pushed = await s.renderAndRead()
+
+      await drag('reconstruct', [460, 580], [520, 580], 6)
+      const rebuilt = await s.renderAndRead()
+
+      s.brush.size = 32
+      const pushedPixels = changed(before, pushed)
+      const leftAfterReconstruct = changed(before, rebuilt)
+      const centre = differenceCentre(before, pushed, 380, 480, 220, 160)
+      return {
+        pass: pushedPixels > 2000 && centre > 484 && leftAfterReconstruct < pushedPixels * 0.25,
+        detail: {
+          layer: bars.name,
+          pushedPixels,
+          differentAfterReconstruct: leftAfterReconstruct,
+          centreOfWhatMoved: Math.round(centre),
+          pointerWentFrom: 480,
         },
       }
     })()`,
@@ -1408,3 +1471,4 @@ for (const testCase of selected) {
 client.close()
 console.log(`\n${selected.length - failed}/${selected.length} passed`)
 process.exit(failed === 0 ? 0 : 1)
+
