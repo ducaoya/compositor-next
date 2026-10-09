@@ -149,6 +149,32 @@ const gridLines = computed(() => {
   return { lines, minor }
 })
 
+/**
+ * The pixel grid: one line per document pixel, in screen pixels.
+ *
+ * Only drawn once a document pixel is eight screen pixels across. Photoshop switches it on at 500%
+ * and it is worth having for the same reason — at that magnification the thing being adjusted is a
+ * grid of pixels rather than a picture — but at smaller sizes the lines outnumber the pixels they
+ * describe and the canvas reads as grey.
+ */
+const pixelGridLines = computed(() => {
+  const current = manifest.value
+  const vertical: number[] = []
+  const horizontal: number[] = []
+  if (!current || view.zoom < 8) return { vertical, horizontal }
+  const width = viewport.width / viewport.dpr
+  const height = viewport.height / viewport.dpr
+  // Only the pixels on screen, so a 100,000-pixel-wide document costs what is visible rather than
+  // what exists.
+  const firstX = Math.max(0, Math.floor(-view.panX / view.zoom))
+  const lastX = Math.min(current.width, Math.ceil((width - view.panX) / view.zoom))
+  for (let x = firstX; x <= lastX; x += 1) vertical.push(x * view.zoom + view.panX)
+  const firstY = Math.max(0, Math.floor(-view.panY / view.zoom))
+  const lastY = Math.min(current.height, Math.ceil((height - view.panY) / view.zoom))
+  for (let y = firstY; y <= lastY; y += 1) horizontal.push(y * view.zoom + view.panY)
+  return { vertical, horizontal }
+})
+
 /** The polygon being built, as an SVG path in screen pixels. */
 const lassoPath = computed(() => {
   const points = lassoPoints.value
@@ -874,6 +900,24 @@ watch(
       />
       <path v-if="lassoPath" class="lasso" :d="lassoPath" />
       <line
+        v-for="(x, index) in pixelGridLines.vertical"
+        :key="`px${index}`"
+        class="grid-line grid-line--pixel"
+        :x1="x"
+        y1="0"
+        :x2="x"
+        :y2="viewport.height / viewport.dpr"
+      />
+      <line
+        v-for="(y, index) in pixelGridLines.horizontal"
+        :key="`py${index}`"
+        class="grid-line grid-line--pixel"
+        x1="0"
+        :y1="y"
+        :x2="viewport.width / viewport.dpr"
+        :y2="y"
+      />
+      <line
         v-if="previewDrag"
         class="drag-line"
         :x1="previewDrag.from[0] * view.zoom + view.panX"
@@ -1024,6 +1068,11 @@ watch(
 
 .grid-line--minor {
   stroke: rgb(120 170 230 / 18%);
+}
+
+/* The pixel grid, which is only on screen once a document pixel is eight across. */
+.grid-line--pixel {
+  stroke: rgb(255 255 255 / 20%);
 }
 
 .lasso {

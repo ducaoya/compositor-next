@@ -39,6 +39,22 @@ const PARAMS_BYTES = 64
 const ADJUST_UNIFORM_SLOTS = 32
 const DISPLAY_BYTES = 48
 
+/** How many mip levels a texture of this size has room for: the whole chain down to 1×1. */
+function mipLevels(width: number, height: number): number {
+  return Math.floor(Math.log2(Math.max(1, width, height))) + 1
+}
+
+/**
+ * Level 0 of a texture, as a view a render pass will accept.
+ *
+ * A view made with no arguments covers every mip level, and WebGPU refuses to use one as a render
+ * attachment — the whole pass is dropped, silently, and the canvas goes blank. Once the accumulation
+ * had a chain, every pass writing into it had to say "level 0 only".
+ */
+function levelZeroView(texture: GPUTexture): GPUTextureView {
+  return texture.createView({ baseMipLevel: 0, mipLevelCount: 1 })
+}
+
 export interface LayerDraw {
   kind: 'layer'
   id: string
@@ -99,6 +115,9 @@ interface Frame {
    */
   flattenPipeline: GPURenderPipeline
   displayPipeline: GPURenderPipeline
+  mipPipeline: GPURenderPipeline
+  mipPipeline16: GPURenderPipeline
+  mipLayout: GPUBindGroupLayout
   emptyBindGroup: GPUBindGroup
   compositeLayout: GPUBindGroupLayout
   displayLayout: GPUBindGroupLayout
@@ -113,6 +132,14 @@ interface Frame {
   accum: [GPUTexture, GPUTexture] | null
   /** Layer textures by asset key, so a repaint can update the one already on the GPU. */
   layerTextures: Map<string, GPUTexture>
+  /**
+   * Layer textures whose mip chain no longer matches their level 0.
+   *
+   * Filled by every upload and drained once per frame: a brush stroke uploads a dirty rectangle
+   * per dab, and rebuilding the chain per dab would cost more than the dab. Once a frame it is a
+   * third of the level-0 fill, which is nothing.
+   */
+  mipDirty: Set<string>
   /** The texture holding the last composited frame. */
   last: GPUTexture | null
   exportTexture: GPUTexture | null
@@ -248,6 +275,37 @@ export class Compositor {
       primitive: { topology: 'triangle-list' },
     })
 
+    // Mip generation lives at group 3, so the three groups before it have to be declared to reach
+    // it. It writes into `rgba8unorm` rather than the accumulation's format because the thing it
+    // downsamples is a layer texture; the accumulation has no chain and needs none.
+    const mipLayout = device.createBindGroupLayout({
+      label: 'mip',
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+      ],
+    })
+    const mipPipeline = device.createRenderPipeline({
+      label: 'mipgen',
+      layout: device.createPipelineLayout({
+        bindGroupLayouts: [emptyLayout, emptyLayout, emptyLayout, mipLayout],
+      }),
+      vertex: { module, entryPoint: 'vs_fullscreen' },
+      fragment: { module, entryPoint: 'fs_mipgen', targets: [{ format: 'rgba8unorm' }] },
+      primitive: { topology: 'triangle-list' },
+    })
+    // The same pass again for the accumulation, which is `rgba16float`: a pipeline's fragment target
+    // format has to match what it writes, so the two cannot be one pipeline.
+    const mipPipeline16 = device.createRenderPipeline({
+      label: 'mipgen16',
+      layout: device.createPipelineLayout({
+        bindGroupLayouts: [emptyLayout, emptyLayout, emptyLayout, mipLayout],
+      }),
+      vertex: { module, entryPoint: 'vs_fullscreen' },
+      fragment: { module, entryPoint: 'fs_mipgen', targets: [{ format: ACCUM_FORMAT }] },
+      primitive: { topology: 'triangle-list' },
+    })
+
     void device.popErrorScope().then((error) => {
       if (error) options.onError?.(`pipeline creation — ${error.message}`)
     })
@@ -269,7 +327,14 @@ export class Compositor {
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     })
 
-    const linearSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' })
+    // Linear *and* mipmapped: the chain is what removes the shimmer from a layer drawn smaller
+    // than its own pixels, and the trilinear blend between two levels is what keeps the transition
+    // from showing as a band as a slider passes a power of two.
+    const linearSampler = device.createSampler({
+      magFilter: 'linear',
+      minFilter: 'linear',
+      mipmapFilter: 'linear',
+    })
     const nearestSampler = device.createSampler({ magFilter: 'nearest', minFilter: 'nearest' })
 
     // A 1×1 transparent texture, so a layer without a mask still has something to bind.
@@ -304,6 +369,9 @@ export class Compositor {
       luts: new Map(),
       flattenPipeline,
       displayPipeline,
+      mipPipeline,
+      mipPipeline16,
+      mipLayout,
       emptyBindGroup,
       compositeLayout,
       displayLayout,
@@ -317,6 +385,7 @@ export class Compositor {
       dummy,
       accum: null,
       layerTextures: new Map(),
+      mipDirty: new Set(),
       last: null,
       exportTexture: null,
       exportSize: [0, 0],
@@ -348,6 +417,10 @@ export class Compositor {
       frame.device.createTexture({
         size: [width, height, 1],
         format: ACCUM_FORMAT,
+        // A chain as well, because the second downsample in a frame is this one: the accumulation is
+        // at document resolution and the screen may be a quarter of it. Sampling level 0 there is
+        // the moiré of zooming out, and no linear filter at one level can remove it.
+        mipLevelCount: mipLevels(width, height),
         usage:
           GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC,
       })
@@ -508,7 +581,7 @@ export class Compositor {
       label: `adjust ${item.id}`,
       colorAttachments: [
         {
-          view: write.createView(),
+          view: levelZeroView(write),
           loadOp: 'clear',
           storeOp: 'store',
           clearValue: { r: 0, g: 0, b: 0, a: 0 },
@@ -558,11 +631,25 @@ export class Compositor {
         ],
         base + 8,
       )
-      scratch.set([draw.transform.sampling === 'Nearest' ? 1 : 0, 0, 0, 0], base + 12)
+      scratch.set(
+        [
+          draw.transform.sampling === 'Nearest' ? 1 : 0,
+          // The source's own size in pixels, which is what picks the mip level: the layer's placed
+          // size over this is how many source texels one canvas pixel covers.
+          draw.texture?.width ?? 1,
+          draw.texture?.height ?? 1,
+          0,
+        ],
+        base + 12,
+      )
     })
     if (scratch.length > 0) frame.device.queue.writeBuffer(frame.compositeUniforms, 0, scratch)
 
     const encoder = frame.device.createCommandEncoder({ label: 'compositor' })
+    // Before anything reads them: a texture painted on since the last frame has a chain that no
+    // longer describes its level 0, and a stale chain shows as a blur of the previous frame.
+    for (const key of frame.mipDirty) this.generateMips(encoder, key)
+    frame.mipDirty.clear()
     let [read, write] = frame.accum
     let layerIndex = 0
 
@@ -586,7 +673,7 @@ export class Compositor {
         label: `layer ${layerIndex}`,
         colorAttachments: [
           {
-            view: write.createView(),
+            view: levelZeroView(write),
             loadOp: 'clear',
             storeOp: 'store',
             clearValue: { r: 0, g: 0, b: 0, a: 0 },
@@ -607,6 +694,9 @@ export class Compositor {
       0,
       new Float32Array([canvas.width, canvas.height, view.zoom, 0, view.panX, view.panY, 0, 0, width, height, 0, 0]),
     )
+
+    // After every pass that writes level 0 and before the one that reads the chain.
+    this.generateAccumMips(encoder, read)
 
     const display = frame.device.createBindGroup({
       label: 'display',
@@ -639,6 +729,29 @@ export class Compositor {
   }
 
   /**
+   * The canvas as it is being shown, which is the only way to measure the display path.
+   *
+   * `flatten` reads the accumulation at document resolution, so it cannot see anything the display
+   * pass does — the view transform, the checkerboard, or the level the zoom is sampled at. A WebGPU
+   * canvas cannot be read with `getImageData`, but it can be snapshotted, and the snapshot is what a
+   * test of a zoomed-out frame has to look at.
+   */
+  async readCanvas(): Promise<{ width: number; height: number; data: Uint8ClampedArray } | null> {
+    const canvas = this.frame.context.canvas as HTMLCanvasElement
+    const bitmap = await createImageBitmap(canvas)
+    const scratch = new OffscreenCanvas(bitmap.width, bitmap.height)
+    const context = scratch.getContext('2d')
+    if (!context) {
+      bitmap.close()
+      return null
+    }
+    context.drawImage(bitmap, 0, 0)
+    const image = context.getImageData(0, 0, scratch.width, scratch.height)
+    bitmap.close()
+    return { width: scratch.width, height: scratch.height, data: image.data }
+  }
+
+  /**
    * Uploads decoded pixels as a layer texture, or updates the region already there.
    *
    * A brush stroke changes a small rectangle per dab, and re-uploading the whole layer for each
@@ -663,6 +776,9 @@ export class Compositor {
         label: key,
         size: [width, height, 1],
         format: 'rgba8unorm',
+        // The whole chain, so a layer drawn at a quarter of its size reads level 2 rather than
+        // point-sampling level 0 and shimmering.
+        mipLevelCount: mipLevels(width, height),
         usage:
           GPUTextureUsage.TEXTURE_BINDING |
           GPUTextureUsage.COPY_DST |
@@ -687,7 +803,80 @@ export class Compositor {
       { texture, origin: { x: area.x, y: area.y } },
       [area.width, area.height],
     )
+    frame.mipDirty.add(key)
     return texture
+  }
+
+  /**
+   * Rebuilds a layer texture's mip chain from level 0.
+   *
+   * One pass per level, each reading the level above through a linear sampler, which averages the
+   * two-by-two block a destination texel covers. The bind groups are cached because a texture being
+   * painted on has its chain rebuilt every frame, and making a fresh bind group per level per frame
+   * is the kind of allocation that shows up as a stutter.
+   */
+  private generateMips(encoder: GPUCommandEncoder, key: string): void {
+    const frame = this.frame
+    const texture = frame.layerTextures.get(key)
+    if (!texture) return
+    this.generateChain(encoder, texture, frame.mipPipeline, `mip|${key}`)
+  }
+
+  /**
+   * The accumulation's chain, rebuilt after compositing and before the display pass reads it.
+   *
+   * The two accumulation textures alternate, so the bind groups are keyed by which one this is
+   * rather than by anything about the frame: rebuilding them every frame would allocate two bind
+   * groups per level per frame for no reason.
+   */
+  private generateAccumMips(encoder: GPUCommandEncoder, texture: GPUTexture): void {
+    const frame = this.frame
+    const slot = frame.accum ? frame.accum.indexOf(texture) : -1
+    this.generateChain(encoder, texture, frame.mipPipeline16, `accum|${slot}`)
+  }
+
+  /** One render pass per level, each reading the level above it with the linear sampler. */
+  private generateChain(
+    encoder: GPUCommandEncoder,
+    texture: GPUTexture,
+    pipeline: GPURenderPipeline,
+    cachePrefix: string,
+  ): void {
+    const frame = this.frame
+    if (texture.mipLevelCount <= 1) return
+    for (let level = 1; level < texture.mipLevelCount; level += 1) {
+      const cacheKey = `${cachePrefix}|${level}`
+      let group = this.bindGroupCache.get(cacheKey)
+      if (!group) {
+        group = frame.device.createBindGroup({
+          label: cacheKey,
+          layout: frame.mipLayout,
+          entries: [
+            { binding: 0, resource: texture.createView({ baseMipLevel: level - 1, mipLevelCount: 1 }) },
+            { binding: 1, resource: frame.linearSampler },
+          ],
+        })
+        this.bindGroupCache.set(cacheKey, group)
+      }
+      const pass = encoder.beginRenderPass({
+        label: cacheKey,
+        colorAttachments: [
+          {
+            view: texture.createView({ baseMipLevel: level, mipLevelCount: 1 }),
+            loadOp: 'clear',
+            storeOp: 'store',
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+          },
+        ],
+      })
+      pass.setPipeline(pipeline)
+      pass.setBindGroup(0, frame.emptyBindGroup)
+      pass.setBindGroup(1, frame.emptyBindGroup)
+      pass.setBindGroup(2, frame.emptyBindGroup)
+      pass.setBindGroup(3, group)
+      pass.draw(3)
+      pass.end()
+    }
   }
 
   /** Uploads a whole layer at once. */
@@ -759,7 +948,7 @@ export class Compositor {
       label: 'flatten',
       colorAttachments: [
         {
-          view: frame.exportTexture.createView(),
+          view: levelZeroView(frame.exportTexture),
           loadOp: 'clear',
           storeOp: 'store',
           clearValue: { r: 0, g: 0, b: 0, a: 0 },

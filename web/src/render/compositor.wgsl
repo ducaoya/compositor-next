@@ -15,7 +15,8 @@ struct CompositeParams {
   b: vec4f,
   // x: rotation in radians; y: flipX; z: flipY; w: 1 when a mask is bound
   c: vec4f,
-  // x: 1 when sampling must be nearest
+  // x: 1 when sampling must be nearest; y, z: the source texture's own size in pixels, which is
+  // what picks the mip level; w: unused
   d: vec4f,
 };
 
@@ -68,6 +69,28 @@ struct DisplayParams {
 // requires every (group, binding) pair to be declared once.
 @group(0) @binding(0) var<uniform> displayParams: DisplayParams;
 @group(0) @binding(1) var accumTex: texture_2d<f32>;
+
+/// Mip generation. WebGPU has no automatic mip chain, so each level is a fullscreen pass reading
+/// the level above it through a linear sampler.
+///
+/// A bilinear fetch at the centre of the four source texels a destination texel covers is exactly
+/// that box average — the sampler does the reduction, and it costs one draw per level instead of the
+/// 16 taps a hand-written box filter would. Without this every layer drawn smaller than its own
+/// pixels was sampled at level 0 alone, which is a point sample of a shrinking image and shimmers:
+/// the moiré a downscaled checkerboard shows is that, and no amount of linear filtering at level 0
+/// removes it, because the information the filter needs is in the levels that were never built.
+@group(3) @binding(0) var mipSource: texture_2d<f32>;
+@group(3) @binding(1) var mipSampler: sampler;
+
+@fragment
+fn fs_mipgen(@builtin(position) frag: vec4f) -> @location(0) vec4f {
+  // Twice the destination pixel's position in the source's own coordinates: the destination has
+  // half the texels, so one destination texel spans two source texels and the sample belongs
+  // halfway between them. `frag.xy` is already a pixel centre, so this lands on the middle of the
+  // two-by-two block rather than on its corner.
+  let size = vec2f(textureDimensions(mipSource, 0));
+  return textureSampleLevel(mipSource, mipSampler, frag.xy * 2.0 / size, 0.0);
+}
 @group(0) @binding(2) var displaySampler: sampler;
 
 @group(1) @binding(0) var<uniform> params: CompositeParams;
@@ -260,11 +283,26 @@ fn fs_composite(@builtin(position) frag: vec4f) -> @location(0) vec4f {
   if (abs(u) <= 1.0 && abs(v) <= 1.0) {
     let uv = vec2f(u * 0.5 + 0.5, v * 0.5 + 0.5);
     if (nearest > 0.5) {
+      // Nearest is for editing at 800% and beyond, where a document pixel is many screen pixels
+      // and the whole point is to see it as it is rather than as an average of its neighbours.
       src = textureSampleLevel(srcTex, nearestSampler, uv, 0.0);
       if (has_mask > 0.5) { mask = textureSampleLevel(maskTex, nearestSampler, uv, 0.0).r; }
     } else {
-      src = textureSampleLevel(srcTex, linearSampler, uv, 0.0);
-      if (has_mask > 0.5) { mask = textureSampleLevel(maskTex, linearSampler, uv, 0.0).r; }
+      // Which level holds the detail a screen pixel can actually show: how many source texels this
+      // layer pixel covers, as a power of two, clamped to the levels that were built. A layer drawn
+      // at its own size or larger sits at level 0, so zooming in stays as crisp as it was.
+      let source_size = max(params.d.yz, vec2f(1.0));
+      let shrink = max(
+        source_size.x / max(abs(size.x), 1e-6),
+        source_size.y / max(abs(size.y), 1e-6),
+      );
+      let levels = log2(max(source_size.x, source_size.y));
+      // Exactly level 0 when the layer is not being shrunk, rather than a hair above it: a level of
+      // 0.001 blends in a thousandth of the level below, which is invisible but enough to move a
+      // pixel by a byte and make an exact assertion look like a regression.
+      let level = select(0.0, clamp(log2(shrink), 0.0, levels), shrink > 1.0);
+      src = textureSampleLevel(srcTex, linearSampler, uv, level);
+      if (has_mask > 0.5) { mask = textureSampleLevel(maskTex, linearSampler, uv, level).r; }
     }
   }
 
@@ -298,7 +336,14 @@ fn fs_display(@builtin(position) frag: vec4f) -> @location(0) vec4f {
 
   let document = (frag.xy - pan) / max(zoom, 1e-6);
   if (document.x >= 0.0 && document.y >= 0.0 && document.x < canvas.x && document.y < canvas.y) {
-    let src = textureSampleLevel(accumTex, displaySampler, document / canvas, 0.0);
+    // How many document pixels one screen pixel covers, as a power of two: the level holding the
+    // detail the screen can actually show. Zoomed out to a quarter that is level 2, which is what
+    // removes the moiré a single-level sample of a shrinking image shows; zoomed in it stays at
+    // level 0, so nothing is softened that did not have to be.
+    let shrink = max(1.0 / max(zoom, 1e-6), 1.0);
+    let levels = log2(max(canvas.x, canvas.y));
+    let level = select(0.0, clamp(log2(shrink), 0.0, levels), shrink > 1.0);
+    let src = textureSampleLevel(accumTex, displaySampler, document / canvas, level);
     // The accumulation is premultiplied, so "over" is one multiply-add.
     color = src.rgb + color * (1.0 - src.a);
   }

@@ -10,6 +10,11 @@
  * These run against a running dev build: headless Chrome on :9222 and Vite on :1420. Start them with
  * `node scripts/dev-browser.mjs` and `pnpm dev` (or `pnpm tauri dev`).
  *
+ * There are two readbacks, and which one a case uses is part of what it is testing. `renderAndRead`
+ * reads the accumulation, which is always at document resolution: it is the document, and a case
+ * about what a layer looks like uses it. `renderAndReadView` snapshots the canvas as shown, which is
+ * the only way to see the zoom, the pan or the mip level a shrunken frame is sampled at.
+ *
  * Assertions happen inside the page and only small verdicts come back, because a frame is two and a
  * half million numbers and sending one over the wire per check is not a test, it is a transfer.
  *
@@ -971,6 +976,78 @@ const CASES = [
           mean: { before: meanBefore.map((value) => Math.round(value)), after: meanAfter.map((value) => Math.round(value)) },
           changed: changed(before, after),
         },
+      }
+    })()`,
+  },
+
+  {
+    name: 'a quarter-size frame does not shimmer',
+    // The fixture is a flat composition with no periodicity, so it has no moire to measure — the
+    // first version of this measurement read zero at every zoom and proved nothing. The case draws
+    // its own pattern: two pixels of black every five, an awkward ratio at a quarter size, so a
+    // sparse sample beats against it and a box average does not.
+    //
+    // The metric is the standard deviation of the three-by-three local mean across the pattern's
+    // screen area, which is what a row of stripes should not have. Measured here: 5.05 with the mip
+    // chain and 10.13 with the display forced to level 0, so the threshold sits between them.
+    probe: `(async () => { ${PRELUDE}
+      const before = await baseFrame()
+      s.setForeground({ r: 0, g: 0, b: 0 })
+      for (let x = 100; x < 400; x += 5) s.drawShape([x, 100], [x + 2, 400], true)
+      await wait(800)
+
+      /** How much a flat area ripples: the spread of its local means, which is what moire is. */
+      const ripple = (frame, rect) => {
+        const means = []
+        for (let y = rect.y + 1; y < rect.y + rect.height - 1; y += 1) {
+          for (let x = rect.x + 1; x < rect.x + rect.width - 1; x += 1) {
+            let total = 0
+            for (let j = -1; j <= 1; j += 1) for (let i = -1; i <= 1; i += 1) total += at(frame, x + i, y + j)[0]
+            means.push(total / 9)
+          }
+        }
+        const average = means.reduce((sum, value) => sum + value, 0) / means.length
+        return Math.sqrt(means.reduce((sum, value) => sum + (value - average) ** 2, 0) / means.length)
+      }
+
+      const strokes = []
+      for (const zoom of [0.25, 0.2, 0.125]) {
+        s.view.zoom = zoom
+        s.view.panX = 0
+        s.view.panY = 0
+        await wait(500)
+        const frame = await s.renderAndReadView()
+        const rect = {
+          x: Math.floor(110 * zoom),
+          y: Math.floor(110 * zoom),
+          width: Math.floor(280 * zoom),
+          height: Math.floor(280 * zoom),
+        }
+        strokes.push({ zoom, ripple: Math.round(ripple(frame, rect) * 100) / 100, samples: rect.width * rect.height })
+      }
+
+      return {
+        pass: strokes[0].ripple < 7 && strokes[1].ripple < 6 && strokes[2].ripple < 5,
+        detail: { stripesDrawn: 60, changedByThePattern: changed(before, await s.renderAndRead()), strokes },
+      }
+    })()`,
+  },
+  {
+    name: 'the pixel grid appears at 800% and not before',
+    probe: `(async () => { ${PRELUDE}
+      await baseFrame()
+      const seen = []
+      for (const zoom of [1, 4, 8, 12]) {
+        s.view.zoom = zoom
+        s.view.panX = 0
+        s.view.panY = 0
+        await wait(400)
+        await s.renderAndReadView()
+        seen.push({ zoom, lines: document.querySelectorAll('.grid-line--pixel').length })
+      }
+      return {
+        pass: seen[0].lines === 0 && seen[1].lines === 0 && seen[2].lines > 0 && seen[3].lines > 0,
+        detail: { seen },
       }
     })()`,
   },

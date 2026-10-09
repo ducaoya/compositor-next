@@ -3316,6 +3316,7 @@ if (typeof window !== 'undefined') {
       addAdjustment,
       selectLayer,
       renderAndRead,
+      renderAndReadView,
       pauseRender,
       resumeRender,
       get renderPaused() {
@@ -3349,6 +3350,30 @@ export async function renderAndRead(): Promise<{ width: number; height: number; 
     const dpr = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1
     target.render(draws.value, { zoom: view.zoom * dpr, panX: view.panX * dpr, panY: view.panY * dpr })
     const frame = await target.flatten()
+    if (!frame) return null
+    return { width: frame.width, height: frame.height, data: Array.from(frame.data) }
+  } finally {
+    resumeRender()
+  }
+}
+
+/**
+ * The canvas as it is being shown, after a render.
+ *
+ * The companion to `renderAndRead`, for what belongs to the display rather than to the document:
+ * the zoom, the pan, and the level a zoomed-out frame is sampled at. A test of moiré at 25% has to
+ * read this rather than the accumulation, because the accumulation is always at document resolution
+ * and shows no trace of how it was scaled onto the screen.
+ */
+export async function renderAndReadView(): Promise<{ width: number; height: number; data: number[] } | null> {
+  const target = compositor.value
+  if (!target) return null
+  pauseRender()
+  try {
+    flushPaint()
+    const dpr = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1
+    target.render(draws.value, { zoom: view.zoom * dpr, panX: view.panX * dpr, panY: view.panY * dpr })
+    const frame = await target.readCanvas()
     if (!frame) return null
     return { width: frame.width, height: frame.height, data: Array.from(frame.data) }
   } finally {
