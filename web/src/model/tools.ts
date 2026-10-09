@@ -25,7 +25,6 @@ export type ToolId =
   | 'burn'
   | 'sponge'
   | 'gradient'
-  | 'pen'
   | 'type'
   | 'shape'
   | 'hand'
@@ -234,15 +233,6 @@ export const TOOLS: ToolDefinition[] = [
       <path d="M6.5 5.5h11" />
       <circle cx="9" cy="13.2" r="1.1" />
       <circle cx="14.5" cy="14.8" r="1.1" />`,
-  },
-  {
-    id: 'pen',
-    labelKey: 'tools.pen',
-    shortcut: 'P',
-    implemented: false,
-    icon: `
-      <path d="M12 3 20 11l-8 10-8-10z" />
-      <path d="M12 3v18M4 11h16" opacity=".55" />`,
   },
   {
     id: 'type',
