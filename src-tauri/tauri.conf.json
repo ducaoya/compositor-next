@@ -20,7 +20,7 @@
         "minHeight": 640,
         "resizable": true,
         "dragDropEnabled": true,
-        "icon": "icons/icon.png"
+        "visible": false
       }
     ],
     "security": {

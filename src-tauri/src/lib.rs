@@ -89,13 +89,20 @@ pub fn run() {
         .manage(StartupProject::new(startup_project))
         .manage(ThumbnailMode::new(thumbnail))
         .setup(move |app| {
-            // A thumbnail is drawn by the same renderer as everything else, in a window nobody sees.
-            // Hiding it rather than making it invisible from the start keeps one window in the
-            // configuration: the webview has to exist for the canvas to, and a hidden window's
-            // webview still runs.
-            if drawing_a_thumbnail {
-                if let Some(window) = app.get_webview_window("main") {
+            // The window is configured hidden and shown here, which is what makes a thumbnail run
+            // invisible: it draws in a window that is never shown, where a window created visible
+            // and hidden a moment later would flash on someone's screen every time a file manager
+            // looked at a project.
+            if let Some(window) = app.get_webview_window("main") {
+                if drawing_a_thumbnail {
                     let _ = window.hide();
+                } else {
+                    // The window's own icon, which a development build needs: a packaged one takes it
+                    // from the executable, where `tauri-build` embeds `bundle.icon`'s `.ico`.
+                    if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png")) {
+                        let _ = window.set_icon(icon);
+                    }
+                    let _ = window.show();
                 }
             }
             Ok(())

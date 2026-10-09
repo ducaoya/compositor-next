@@ -343,8 +343,9 @@ fn check_pack(value: &serde_json::Value) -> Result<String, String> {
 fn describe(app: &AppHandle, path: &str) -> Result<OpenedProject, compositor_core::ProjectError> {
     let project = state::load(path)?;
     // Only the project's own folder is reachable over the asset protocol, and only after it has
-    // been opened.
-    let _ = app.asset_protocol_scope().allow_directory(&project.root, false);
+    // been opened — recursively, because a layer's pixels live one level down in `images/` and a
+    // scope that stopped at the folder would refuse every one of them.
+    let _ = app.asset_protocol_scope().allow_directory(&project.root, true);
 
     let mut assets = Vec::new();
     for layer in &project.manifest.layers {

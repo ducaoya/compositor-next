@@ -4274,6 +4274,10 @@ export async function runThumbnailJob(): Promise<boolean> {
   if (!job) return false
 
   try {
+    // Before the project is opened, not after: opening decodes each layer's PNG straight into a GPU
+    // texture, and there is nowhere to put them until the canvas has a compositor. A thumbnail run
+    // starts from the application's own mount, which is earlier than the canvas's.
+    await waitForCompositor()
     const opened = await (await backend()).openProjectAt(job.source)
     await adopt(opened)
     const frame = await renderFrameBytes()
