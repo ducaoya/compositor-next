@@ -75,6 +75,7 @@ import {
   promptSelectionAmount,
   redo,
   reloadLanguagePacks,
+  runThumbnailJob,
   saveProject,
   selectAll,
   undo,
@@ -461,8 +462,10 @@ function onKeyDown(event: KeyboardEvent): void {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   void loadLanguagePacks()
+  // A thumbnail run draws one picture and stops; nothing else about a session applies to it.
+  if (await runThumbnailJob()) return
   // Work the last run never saved, and the project a double-click named, if there was one. Both
   // ask the shell, so both are no-ops in a browser preview.
   void checkForRecovery()

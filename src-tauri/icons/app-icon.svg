@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Compositor's icon: two layers, one behind the other, over the gradient the sample document uses.
+
+  The mark is deliberately two shapes rather than the three or four a layers glyph usually has: at
+  16 pixels — where a taskbar, a file manager and an alt-tab switcher draw it — three overlaps turn
+  into a smudge, and two still read as one thing in front of another. The squares are rotated a few
+  degrees so the pair reads as placed rather than as a pattern.
+
+  Edit this file and run `pnpm tauri icon src-tauri/icons/app-icon.svg` to regenerate every size the
+  bundles need. Nothing draws it at runtime.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="plate" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#16233d" />
+      <stop offset="0.48" stop-color="#3a6cae" />
+      <stop offset="0.88" stop-color="#f0a35e" />
+      <stop offset="1" stop-color="#f5b878" />
+    </linearGradient>
+    <linearGradient id="front" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#ffffff" />
+      <stop offset="1" stop-color="#e3ecf7" />
+    </linearGradient>
+    <filter id="lift" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#0b1220" flood-opacity="0.45" />
+    </filter>
+  </defs>
+
+  <!-- The plate. Rounded, so it sits the same way in a macOS dock, a Windows taskbar and a
+       launcher grid; the stroke keeps its edge from vanishing on a dark desktop. -->
+  <rect x="64" y="64" width="896" height="896" rx="208" fill="url(#plate)" />
+  <rect x="64" y="64" width="896" height="896" rx="208" fill="none" stroke="#ffffff" stroke-opacity="0.16" stroke-width="8" />
+
+  <!-- The layer behind: the document as it was. -->
+  <rect x="196" y="238" width="420" height="420" rx="72" fill="#ffffff" fill-opacity="0.28"
+        transform="rotate(-9 406 448)" />
+
+  <!-- The layer in front: the document as the last edit left it. Opaque, because a translucent card
+       over the one behind it reads as a smudge at small sizes rather than as two layers — tried, and
+       the two crisp shapes are worth more than the pun about blending. -->
+  <g filter="url(#lift)">
+    <rect x="408" y="376" width="456" height="456" rx="80" fill="url(#front)"
+          transform="rotate(-9 636 604)" />
+  </g>
+</svg>

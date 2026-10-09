@@ -304,7 +304,7 @@ async function tauriBackend(): Promise<Backend> {
   return (kind === 'image' ? layer.imageFile : layer.maskFile) ?? null
 }
 
-function base64url(text: string): string {
+export function base64url(text: string): string {
   const bytes = new TextEncoder().encode(text)
   let binary = ''
   for (const byte of bytes) binary += String.fromCharCode(byte)

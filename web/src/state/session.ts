@@ -127,6 +127,7 @@ import type { ToneRange } from '../render/retouch'
 import {
   assetKey,
   backend,
+  base64url,
   type AssetBytes,
   type Backend,
   type OpenedProject,
@@ -4246,6 +4247,110 @@ export async function renderAndReadView(): Promise<{ width: number; height: numb
   } finally {
     resumeRender()
   }
+}
+
+/**
+ * Draws the thumbnail a run was started for, and exits.
+ *
+ * Windows asks for a thumbnail through a provider that starts this binary and waits for a file, so
+ * this is the whole of that run: open the project, render it once through the renderer everything
+ * else uses, scale it down, write the PNG, stop. None of a session's business applies — no recovery
+ * offer, no autosave, no second instance — because a thumbnail is a question about a file.
+ *
+ * Whatever happens, the process exits: the shell is waiting on the process, and a provider that never
+ * returns is worse than one that answers with the icon it would have had anyway. A failure is logged
+ * where a developer can find it and nothing more.
+ */
+export async function runThumbnailJob(): Promise<boolean> {
+  if (!inShell()) return false
+  const { invoke } = await import('@tauri-apps/api/core')
+  let job: { source: string; target: string; size: number } | null = null
+  try {
+    job = await invoke<{ source: string; target: string; size: number } | null>('thumbnail_job')
+  } catch (error) {
+    console.warn('the shell did not say whether this is a thumbnail run', error)
+    return false
+  }
+  if (!job) return false
+
+  try {
+    const opened = await (await backend()).openProjectAt(job.source)
+    await adopt(opened)
+    const frame = await renderFrameBytes()
+    if (!frame) throw new Error('the document did not render')
+    const blob = await thumbnailBlob(frame, job.size)
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    await invoke('write_file', bytes, { headers: { 'x-path': base64url(job.target) } })
+  } catch (error) {
+    console.error('the thumbnail could not be drawn', error)
+  }
+  await invoke('thumbnail_done').catch(() => undefined)
+  return true
+}
+
+/**
+ * The document's pixels as bytes, for the thumbnail path.
+ *
+ * Deliberately not `renderAndRead`: that hands back a plain array, because the pixel cases send it
+ * over a wire — and a 4,000 × 4,000 document would be sixty-four million numbers, half a gigabyte of
+ * them, to make a 256-pixel picture.
+ */
+export async function renderFrameBytes(): Promise<{
+  width: number
+  height: number
+  data: Uint8ClampedArray
+} | null> {
+  await waitForCompositor()
+  const target = compositor.value
+  if (!target) return null
+  pauseRender()
+  try {
+    flushPaint()
+    const dpr = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1
+    target.render(draws.value, { zoom: view.zoom * dpr, panX: view.panX * dpr, panY: view.panY * dpr })
+    const frame = await target.flatten()
+    if (!frame) return null
+    return { width: frame.width, height: frame.height, data: frame.data }
+  } finally {
+    resumeRender()
+  }
+}
+
+/** Waits for the canvas to have a compositor, which a hidden window still gets. */
+async function waitForCompositor(timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!compositor.value && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+}
+
+/** The frame scaled to fit a square of `size`, as a PNG. */
+async function thumbnailBlob(
+  frame: { width: number; height: number; data: Uint8ClampedArray },
+  size: number,
+): Promise<Blob> {
+  const longest = Math.max(frame.width, frame.height)
+  const scale = longest > 0 ? Math.min(1, size / longest) : 1
+  const width = Math.max(1, Math.round(frame.width * scale))
+  const height = Math.max(1, Math.round(frame.height * scale))
+
+  const source = new OffscreenCanvas(frame.width, frame.height)
+  const sourceContext = source.getContext('2d')
+  if (!sourceContext) throw new Error('a 2D context was not available for the thumbnail')
+  sourceContext.putImageData(
+    new ImageData(frame.data as ImageDataArray, frame.width, frame.height),
+    0,
+    0,
+  )
+  if (scale === 1) return source.convertToBlob({ type: 'image/png' })
+
+  const canvas = new OffscreenCanvas(width, height)
+  const context = canvas.getContext('2d')
+  if (!context) throw new Error('a 2D context was not available for the thumbnail')
+  // The shell draws this at a few tens of pixels wide, and a box filter there is a visible mess.
+  context.imageSmoothingQuality = 'high'
+  context.drawImage(source, 0, 0, width, height)
+  return canvas.convertToBlob({ type: 'image/png' })
 }
 
 /** Marks an asset as rewritten, so a save writes bytes rather than copying the old file. */

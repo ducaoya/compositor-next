@@ -20,9 +20,11 @@
 mod commands;
 mod recovery;
 mod state;
+mod thumbnail;
 mod watcher;
 
 pub use state::{SaveSessions, StartupProject};
+pub use thumbnail::{ThumbnailMode, ThumbnailRequest};
 pub use watcher::Watchers;
 
 use tauri::{Emitter, Manager};
@@ -51,15 +53,21 @@ fn comp_path_from_args<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<St
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
     // Read before the window exists: the shell hands the path to the process, and the webview asks
     // for it once it is up, so that a cold start opens the project a double-click named.
-    let startup_project =
-        comp_path_from_args(std::env::args().skip(1).collect::<Vec<_>>().iter().map(String::as_str));
+    let startup_project = comp_path_from_args(args.iter().map(String::as_str));
+    let thumbnail = ThumbnailRequest::from_args(args.iter().map(String::as_str));
+    let drawing_a_thumbnail = thumbnail.is_some();
 
-    tauri::Builder::default()
-        // Registered first, as the plugin asks: a second launch of a `.comp` has to reach the
-        // window that is already running rather than start a rival copy holding the same project.
-        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+    let mut builder = tauri::Builder::default();
+    if !drawing_a_thumbnail {
+        // Registered first, as the plugin asks: a second launch of a `.comp` has to reach the window
+        // that is already running rather than start a rival copy holding the same project.
+        //
+        // Not for a thumbnail run, and that is not a detail: Explorer asks for several at once, and
+        // each one forwarded to the running window would exit without drawing anything.
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if let Some(path) = comp_path_from_args(argv.iter().map(String::as_str)) {
                 let _ = app.emit("project:open", path);
             }
@@ -68,7 +76,10 @@ pub fn run() {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
-        }))
+        }));
+    }
+
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
@@ -76,6 +87,19 @@ pub fn run() {
         .manage(SaveSessions::default())
         .manage(Watchers::default())
         .manage(StartupProject::new(startup_project))
+        .manage(ThumbnailMode::new(thumbnail))
+        .setup(move |app| {
+            // A thumbnail is drawn by the same renderer as everything else, in a window nobody sees.
+            // Hiding it rather than making it invisible from the start keeps one window in the
+            // configuration: the webview has to exist for the canvas to, and a hidden window's
+            // webview still runs.
+            if drawing_a_thumbnail {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::open_project,
             commands::create_project,
@@ -92,6 +116,8 @@ pub fn run() {
             commands::install_language_pack,
             commands::open_language_folder,
             commands::startup_project,
+            thumbnail::thumbnail_job,
+            thumbnail::thumbnail_done,
             recovery::prepare_recovery,
             recovery::label_recovery,
             recovery::list_recovery,
