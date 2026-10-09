@@ -1173,6 +1173,57 @@ const CASES = [
   },
 
   {
+    name: 'a rebound key runs the command it was bound to',
+    // The keyboard map is data, and this is what that buys: the key press goes through the same
+    // table the menu labels read, so a rebind reaches the command and the old key stops reaching it.
+    // Saving in the browser preview cannot write anything, which is exactly what makes it
+    // observable — the status line says so.
+    probe: `(async () => { ${PRELUDE}
+      const chord = (key, shift) => window.dispatchEvent(new KeyboardEvent('keydown', { key, ctrlKey: true, shiftKey: !!shift, bubbles: true }))
+      const preview = 'This is a browser preview: nothing can be written to disk.'
+
+      s.resetKeymap()
+      const shipped = s.keymap['file.save']
+      // Commands need a document: with nothing open, saving has nothing to say and Ctrl+A has nothing
+      // to select.
+      await freshDocument()
+
+      // Save is greyed until there is something to save, so the document has to be dirty first —
+      // a key follows the same availability the menu shows.
+      s.nudgeActive(1, 0)
+
+      // Save on its shipped chord says what it always said.
+      s.report(null)
+      chord('s')
+      await wait(80)
+      const onTheShippedKey = s.message
+
+      // Rebind it, and the new chord is the one that reaches it.
+      const taken = s.setBinding('file.save', 'Ctrl+Shift+U')
+      s.report(null)
+      chord('s')
+      await wait(80)
+      const onTheOldKey = s.message
+      chord('u', true)
+      await wait(80)
+      const onTheNewKey = s.message
+
+      s.resetKeymap()
+      const restored = s.keymap['file.save']
+
+      return {
+        pass: shipped === 'Ctrl+S'
+          && onTheShippedKey === preview
+          && onTheOldKey === null
+          && onTheNewKey === preview
+          && taken.length === 0
+          && restored === 'Ctrl+S',
+        detail: { shipped, taken, onTheShippedKey, onTheOldKey, onTheNewKey, restored },
+      }
+    })()`,
+  },
+
+  {
     name: 'gaussian blur smooths',
     probe: `(async () => { ${PRELUDE}
       const r = await setup('Gaussian Blur', (a) => { a.blurRadius = 24 })

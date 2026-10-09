@@ -7,6 +7,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import { TOOLS, type ToolDefinition } from '../model/tools'
+import { shortcutFor } from '../state/keymap'
 import { selectTool, setForeground, swapColors, resetColors, useSession } from '../state/session'
 
 const { t } = useI18n()
@@ -46,6 +47,16 @@ function hex(): string {
   const part = (value: number) => value.toString(16).padStart(2, '0')
   return `#${part(foreground.r)}${part(foreground.g)}${part(foreground.b)}`
 }
+
+/**
+ * The tool's key, as it is bound right now.
+ *
+ * A tooltip that kept naming the key a tool shipped with would be worse than none: it would send
+ * someone to press a key that does something else.
+ */
+function keyFor(entry: ToolDefinition): string {
+  return shortcutFor(`tool.${entry.id}`) || t('shortcuts.cleared')
+}
 </script>
 
 <template>
@@ -58,7 +69,7 @@ function hex(): string {
           :disabled="!entry.implemented"
           :title="
             entry.implemented
-              ? `${t(entry.labelKey)} (${entry.shortcut})`
+              ? `${t(entry.labelKey)} (${keyFor(entry)})`
               : t('tools.notInBuild', { tool: t(entry.labelKey) })
           "
           @click="choose(entry)"

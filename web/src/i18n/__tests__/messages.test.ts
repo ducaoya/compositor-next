@@ -4,6 +4,7 @@ import en from '../locales/en.json'
 import zhCN from '../locales/zh-CN.json'
 import { BUILT_IN, FALLBACK_LOCALE, validatePack, isPackProblem } from '../index'
 import { BLEND_MODES, SAMPLINGS, blendModeKey, samplingKey } from '../../model/types'
+import { COMMANDS } from '../../model/keymap'
 
 type Tree = { [key: string]: string | Tree }
 
@@ -71,8 +72,7 @@ describe('the message tables', () => {
     }
   })
 
-  it('carries every failure Rust can name', () => {
-    // The keys the command layer builds with `message_key()`, plus the rule codes.
+  it('carries every failure Rust can name', () => {    // The keys the command layer builds with `message_key()`, plus the rule codes.
     const keys = [
       'error.invalid',
       'error.version',
@@ -98,6 +98,17 @@ describe('the message tables', () => {
     for (const key of keys) {
       expect(EN.has(key), `${key} is missing from English`).toBe(true)
       expect(ZH.has(key), `${key} is missing from Chinese`).toBe(true)
+    }
+  })
+
+  /**
+   * A command's label is its menu item's, which is what keeps the shortcut sheet from needing a
+   * table of names of its own. A command whose key is not in the tables would show as a raw key name.
+   */
+  it('names every command that can be bound to a key', () => {
+    for (const command of COMMANDS) {
+      expect(EN.has(command.labelKey), `${command.id} → ${command.labelKey}, in English`).toBe(true)
+      expect(ZH.has(command.labelKey), `${command.id} → ${command.labelKey}, in Chinese`).toBe(true)
     }
   })
 })

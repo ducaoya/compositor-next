@@ -74,7 +74,9 @@
     "lensCorrection": "Lens Correction…",
     "removeBackground": "Remove Background",
     "checkUpdates": "Check for Updates",
-    "installUpdate": "Install Update…"
+    "installUpdate": "Install Update…",
+    "mergeLayers": "Merge Layers",
+    "keyboardShortcuts": "Keyboard Shortcuts…"
   },
   "tools": {
     "move": "Move",
@@ -548,8 +550,7 @@
     "gaussianNoise": "Gaussian",
     "wholeLayer": "With no selection, the filter runs over the whole layer."
   },
-  "recovery": {
-    "title": "Recover Unsaved Work",
+  "recovery": {    "title": "Recover Unsaved Work",
     "body": "The last run ended with these documents unsaved:",
     "from": "From {path}",
     "neverSaved": "Never saved",
@@ -569,5 +570,17 @@
     "installing": "Installing the update…",
     "installed": "The update was installed. Restarting.",
     "installFailed": "The update could not be installed. Nothing was changed."
+  },
+  "shortcuts": {
+    "title": "Keyboard Shortcuts",
+    "hint": "Click a key and press the keys to bind them. Backspace takes the key away; Escape leaves it alone.",
+    "tools": "Tools",
+    "press": "Press keys…",
+    "cleared": "Not set",
+    "takenFrom": "{names} lost that key.",
+    "conflict": "More than one command answers to {chords}.",
+    "fixed": "The arrow keys nudge the active layer, and Enter applies or Escape cancels a crop. Those are not rebindable.",
+    "reset": "Restore Defaults",
+    "done": "Done"
   }
 }

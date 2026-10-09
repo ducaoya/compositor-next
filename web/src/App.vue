@@ -16,6 +16,7 @@ import NewCanvasSheet from './components/NewCanvasSheet.vue'
 import DimensionSheet from './components/DimensionSheet.vue'
 import DocumentTabs from './components/DocumentTabs.vue'
 import CommandPalette, { type Command } from './components/CommandPalette.vue'
+import ShortcutSheet from './components/ShortcutSheet.vue'
 import EffectsSheet from './components/EffectsSheet.vue'
 import FilterSheet from './components/FilterSheet.vue'
 import SelectionAmountSheet from './components/SelectionAmountSheet.vue'
@@ -25,7 +26,9 @@ import PropertiesPanel from './components/PropertiesPanel.vue'
 import StatusBar from './components/StatusBar.vue'
 import ToolRail from './components/ToolRail.vue'
 import { ADJUSTMENT_KINDS, adjustmentKindKey } from './model/adjustments'
-import { SHORTCUT_CYCLES } from './model/tools'
+import { commandForEvent, type CommandId } from './model/keymap'
+import { TOOLS } from './model/tools'
+import { keymap, recordingCommand, shortcutFor, shortcutSheetOpen } from './state/keymap'
 import {
   addAdjustment,
   addBlankLayer,
@@ -109,6 +112,9 @@ const {
 
 interface MenuItem {
   label?: string
+  /** The command this item runs, when it is one a key can be bound to. */
+  command?: CommandId
+  /** The chord to print beside it, read from the keyboard map rather than typed here. */
   shortcut?: string
   run?: () => void
   enabled?: () => boolean
@@ -124,6 +130,30 @@ interface Menu {
 }
 
 const openMenu = ref<number | null>(null)
+
+/**
+ * Every command, by id: what it runs and whether it can run now.
+ *
+ * Built from the menus rather than kept beside them — a table of its own would be a second place to
+ * forget a command exists — plus one entry per tool, which the menus have no item for because the
+ * rail is where a tool is chosen.
+ */
+const itemsByCommand = computed(() => {
+  const items = new Map<CommandId, MenuItem>()
+  for (const menu of menus.value) {
+    for (const item of menu.items) {
+      if (item.command) items.set(item.command, item)
+    }
+  }
+  for (const tool of TOOLS) {
+    if (!tool.implemented) continue
+    const id: CommandId = `tool.${tool.id}`
+    // Cycling rather than selecting: pressing `R` three times walks the three tools that share it,
+    // which is what a group of tools on one key is for.
+    items.set(id, { run: () => cycleTool(shortcutFor(id)) })
+  }
+  return items
+})
 
 /**
  * Whether a filter can run: it needs a layer that has pixels to work on.
@@ -143,37 +173,39 @@ const menus = computed<Menu[]>(() => [
   {
     label: t('menu.file'),
     items: [
-      { label: t('menu.newProject'), shortcut: 'Ctrl+N', run: () => (newCanvasPrompt.open = true) },
-      { label: t('menu.open'), shortcut: 'Ctrl+O', run: () => void openProject() },
-      { label: t('menu.importImages'), run: () => void importImages() },
+      { label: t('menu.newProject'), command: 'file.new', shortcut: shortcutFor('file.new'), run: () => (newCanvasPrompt.open = true) },
+      { label: t('menu.open'), command: 'file.open', shortcut: shortcutFor('file.open'), run: () => void openProject() },
+      { label: t('menu.importImages'), command: 'file.import', run: () => void importImages() },
       { label: '' },
       {
         label: t('menu.save'),
-        shortcut: 'Ctrl+S',
+        command: 'file.save',
+        shortcut: shortcutFor('file.save'),
         run: () => void saveProject(),
         enabled: () => dirty.value,
       },
-      { label: t('menu.exportPng'), shortcut: 'Ctrl+E', run: () => void exportPNG() },
-      { label: t('menu.exportJpeg'), run: () => void exportJPEG() },
+      { label: t('menu.exportPng'), command: 'file.exportPng', shortcut: shortcutFor('file.exportPng'), run: () => void exportPNG() },
+      { label: t('menu.exportJpeg'), command: 'file.exportJpeg', run: () => void exportJPEG() },
     ],
   },
   {
     label: t('menu.edit'),
     items: [
-      { label: t('menu.undo'), shortcut: 'Ctrl+Z', run: undo },
-      { label: t('menu.redo'), shortcut: 'Ctrl+Shift+Z', run: redo },
+      { label: t('menu.undo'), command: 'edit.undo', shortcut: shortcutFor('edit.undo'), run: undo },
+      { label: t('menu.redo'), command: 'edit.redo', shortcut: shortcutFor('edit.redo'), run: redo },
       { label: '' },
-      { label: t('menu.fillForeground'), run: () => fillLayer({ ...foreground }) },
-      { label: t('menu.fillBackground'), run: () => fillLayer({ ...background }) },
-      { label: t('menu.clear'), shortcut: 'Delete', run: () => fillLayer(null) },
+      { label: t('menu.fillForeground'), command: 'edit.fillForeground', run: () => fillLayer({ ...foreground }) },
+      { label: t('menu.fillBackground'), command: 'edit.fillBackground', run: () => fillLayer({ ...background }) },
+      { label: t('menu.clear'), command: 'edit.clear', shortcut: shortcutFor('edit.clear'), run: () => fillLayer(null) },
       { label: '' },
       {
         label: t('menu.contentAwareFill'),
+        command: 'edit.contentAwareFill',
         run: contentAwareFill,
         enabled: () => selection.value !== null && activeLayer.value?.imageFile !== undefined,
       },
       { label: '' },
-      { label: t('menu.copyMerged'), shortcut: 'Ctrl+Shift+C', run: () => void copyMerged(), enabled: () => manifest.value !== null },
+      { label: t('menu.copyMerged'), command: 'edit.copyMerged', shortcut: shortcutFor('edit.copyMerged'), run: () => void copyMerged(), enabled: () => manifest.value !== null },
       { label: '' },
       { label: t('language.title'), heading: true },
       ...locales.value.map((entry) => ({
@@ -189,23 +221,25 @@ const menus = computed<Menu[]>(() => [
         enabled: () => inTauri(),
       },
       { label: t('language.reload'), run: () => void reloadLanguagePacks() },
+      { label: '' },
+      { label: t('menu.keyboardShortcuts'), run: () => (shortcutSheetOpen.value = true) },
     ],
   },
   {
     label: t('menu.image'),
     items: [
-      { label: t('menu.canvasSize'), run: () => openDimensionPrompt('canvas'), enabled: () => manifest.value !== null },
-      { label: t('menu.imageSize'), run: () => openDimensionPrompt('image'), enabled: () => manifest.value !== null },
-      { label: t('menu.trim'), run: () => trimTransparent(), enabled: () => manifest.value !== null },
+      { label: t('menu.canvasSize'), command: 'image.canvasSize', run: () => openDimensionPrompt('canvas'), enabled: () => manifest.value !== null },
+      { label: t('menu.imageSize'), command: 'image.imageSize', run: () => openDimensionPrompt('image'), enabled: () => manifest.value !== null },
+      { label: t('menu.trim'), command: 'image.trim', run: () => trimTransparent(), enabled: () => manifest.value !== null },
       { label: '' },
-      { label: t('menu.flipCanvasH'), run: () => flipCanvas(true), enabled: () => manifest.value !== null },
-      { label: t('menu.flipCanvasV'), run: () => flipCanvas(false), enabled: () => manifest.value !== null },
+      { label: t('menu.flipCanvasH'), command: 'image.flipHorizontal', run: () => flipCanvas(true), enabled: () => manifest.value !== null },
+      { label: t('menu.flipCanvasV'), command: 'image.flipVertical', run: () => flipCanvas(false), enabled: () => manifest.value !== null },
     ],
   },
   {
     label: t('menu.layer'),
     items: [
-      { label: t('menu.newLayer'), shortcut: 'Ctrl+Shift+N', run: addBlankLayer },
+      { label: t('menu.newLayer'), command: 'layer.new', shortcut: shortcutFor('layer.new'), run: addBlankLayer },
       { label: t('adjust.title'), heading: true },
       ...ADJUSTMENT_KINDS.map((kind) => ({
         label: t(adjustmentKindKey(kind)),
@@ -213,53 +247,53 @@ const menus = computed<Menu[]>(() => [
       })),
       { label: '' },
       { label: t('menu.adjustmentHeading'), heading: true },
-      { label: t('menu.newGroup'), run: addFolder },
-      { label: t('menu.duplicateLayer'), shortcut: 'Ctrl+J', run: duplicateSelected },
+      { label: t('menu.newGroup'), command: 'layer.newGroup', run: addFolder },
+      { label: t('menu.duplicateLayer'), command: 'layer.duplicate', shortcut: shortcutFor('layer.duplicate'), run: duplicateSelected },
       { label: '' },
-      { label: t('menu.groupLayers'), shortcut: 'Ctrl+G', run: groupSelected },
-      { label: t('menu.ungroupLayers'), shortcut: 'Ctrl+Shift+G', run: ungroupSelected },
+      { label: t('menu.groupLayers'), command: 'layer.group', shortcut: shortcutFor('layer.group'), run: groupSelected },
+      { label: t('menu.ungroupLayers'), command: 'layer.ungroup', shortcut: shortcutFor('layer.ungroup'), run: ungroupSelected },
       { label: '' },
-      { label: t('menu.bringForward'), shortcut: 'Ctrl+]', run: () => moveActive(1) },
-      { label: t('menu.sendBackward'), shortcut: 'Ctrl+[', run: () => moveActive(-1) },
+      { label: t('menu.bringForward'), command: 'layer.bringForward', shortcut: shortcutFor('layer.bringForward'), run: () => moveActive(1) },
+      { label: t('menu.sendBackward'), command: 'layer.sendBackward', shortcut: shortcutFor('layer.sendBackward'), run: () => moveActive(-1) },
       { label: '' },
       { label: '' },
-      { label: mergeTitle.value, shortcut: 'Ctrl+E', run: () => (targetIdsCount() > 1 ? mergeLayers() : mergeDown()), enabled: () => canMergeDown.value || targetIdsCount() > 1 },
+      { label: mergeTitle.value, command: 'layer.merge', shortcut: shortcutFor('layer.merge'), run: () => (targetIdsCount() > 1 ? mergeLayers() : mergeDown()), enabled: () => canMergeDown.value || targetIdsCount() > 1 },
       { label: '' },
       { label: t('menu.invertMask'), run: () => editLayerMask('invert'), enabled: () => activeLayer.value?.maskFile !== undefined },
       { label: t('menu.blurMask'), run: () => editLayerMask('blur', 10), enabled: () => activeLayer.value?.maskFile !== undefined },
       { label: t('menu.featherMask'), run: () => editLayerMask('feather', 20), enabled: () => activeLayer.value?.maskFile !== undefined },
       { label: '' },
       { label: '' },
-      { label: t('menu.layerEffects') + '…', run: openEffectsSheet, enabled: () => activeLayer.value !== undefined },
+      { label: t('menu.layerEffects') + '…', command: 'layer.effects', run: openEffectsSheet, enabled: () => activeLayer.value !== undefined },
       { label: '' },
-      { label: t('menu.deleteLayer'), run: deleteSelected },
+      { label: t('menu.deleteLayer'), command: 'layer.delete', run: deleteSelected },
     ],
   },
   {
     label: t('menu.select'),
     items: [
-      { label: t('menu.selectAll'), shortcut: 'Ctrl+A', run: selectAll },
-      { label: t('menu.deselect'), shortcut: 'Ctrl+D', run: deselect },
-      { label: t('menu.inverse'), shortcut: 'Ctrl+Shift+I', run: invertSelection },
+      { label: t('menu.selectAll'), command: 'select.all', shortcut: shortcutFor('select.all'), run: selectAll },
+      { label: t('menu.deselect'), command: 'select.deselect', shortcut: shortcutFor('select.deselect'), run: deselect },
+      { label: t('menu.inverse'), command: 'select.inverse', shortcut: shortcutFor('select.inverse'), run: invertSelection },
       { label: '' },
-      { label: t('select.loadPixels'), run: loadLayerSelection, enabled: () => activeLayer.value?.imageFile !== undefined },
-      { label: t('select.loadMask'), run: loadMaskSelection, enabled: () => activeLayer.value?.maskFile !== undefined },
+      { label: t('select.loadPixels'), command: 'select.fromPixels', run: loadLayerSelection, enabled: () => activeLayer.value?.imageFile !== undefined },
+      { label: t('select.loadMask'), command: 'select.fromMask', run: loadMaskSelection, enabled: () => activeLayer.value?.maskFile !== undefined },
       { label: '' },
-      { label: t('select.feather') + '…', run: () => promptSelectionAmount('feather'), enabled: () => selection.value !== null },
-      { label: t('select.expand') + '…', run: () => promptSelectionAmount('expand'), enabled: () => selection.value !== null },
-      { label: t('select.contract') + '…', run: () => promptSelectionAmount('contract'), enabled: () => selection.value !== null },
+      { label: t('select.feather') + '…', command: 'select.feather', run: () => promptSelectionAmount('feather'), enabled: () => selection.value !== null },
+      { label: t('select.expand') + '…', command: 'select.expand', run: () => promptSelectionAmount('expand'), enabled: () => selection.value !== null },
+      { label: t('select.contract') + '…', command: 'select.contract', run: () => promptSelectionAmount('contract'), enabled: () => selection.value !== null },
     ],
   },
   {
     label: t('menu.filter'),
     items: [
-      { label: t('menu.gaussianBlur'), run: () => openFilterSheet('blur'), enabled: canFilter },
-      { label: t('menu.addNoise'), run: () => openFilterSheet('noise'), enabled: canFilter },
+      { label: t('menu.gaussianBlur'), command: 'filter.blur', run: () => openFilterSheet('blur'), enabled: canFilter },
+      { label: t('menu.addNoise'), command: 'filter.noise', run: () => openFilterSheet('noise'), enabled: canFilter },
       { label: '' },
-      { label: t('menu.vignette'), run: () => openFilterSheet('vignette'), enabled: canFilter },
-      { label: t('menu.bloomGlow'), run: () => openFilterSheet('glow'), enabled: canFilter },
-      { label: t('menu.tonalContrast'), run: () => openFilterSheet('tonal'), enabled: canFilter },
-      { label: t('menu.lensCorrection'), run: () => openFilterSheet('lens'), enabled: canFilter },
+      { label: t('menu.vignette'), command: 'filter.vignette', run: () => openFilterSheet('vignette'), enabled: canFilter },
+      { label: t('menu.bloomGlow'), command: 'filter.glow', run: () => openFilterSheet('glow'), enabled: canFilter },
+      { label: t('menu.tonalContrast'), command: 'filter.tonal', run: () => openFilterSheet('tonal'), enabled: canFilter },
+      { label: t('menu.lensCorrection'), command: 'filter.lens', run: () => openFilterSheet('lens'), enabled: canFilter },
       { label: '' },
       // Camera Raw develops a RAW file, which is the importer's job rather than a filter's, and
       // Remove Background needs a model this build does not ship. Both say so rather than offering
@@ -271,26 +305,27 @@ const menus = computed<Menu[]>(() => [
   {
     label: t('menu.view'),
     items: [
-      { label: t('menu.zoomIn'), shortcut: 'Ctrl++', run: () => zoomBy(1.25) },
-      { label: t('menu.zoomOut'), shortcut: 'Ctrl+-', run: () => zoomBy(1 / 1.25) },
-      { label: t('menu.commandPalette'), shortcut: 'F', run: () => (paletteOpen.value = true) },
+      { label: t('menu.zoomIn'), command: 'view.zoomIn', shortcut: shortcutFor('view.zoomIn'), run: () => zoomBy(1.25) },
+      { label: t('menu.zoomOut'), command: 'view.zoomOut', shortcut: shortcutFor('view.zoomOut'), run: () => zoomBy(1 / 1.25) },
+      { label: t('menu.commandPalette'), command: 'view.palette', shortcut: shortcutFor('view.palette'), run: () => (paletteOpen.value = true) },
       { label: '' },
-      { label: t('menu.fitOnScreen'), shortcut: 'Ctrl+0', run: fit },
-      { label: t('menu.actualPixels'), shortcut: 'Ctrl+1', run: () => zoomTo(1) },
+      { label: t('menu.fitOnScreen'), command: 'view.fit', shortcut: shortcutFor('view.fit'), run: fit },
+      { label: t('menu.actualPixels'), command: 'view.actualPixels', shortcut: shortcutFor('view.actualPixels'), run: () => zoomTo(1) },
       { label: '' },
-      { label: t('menu.rulers'), run: () => (showsRulers.value = !showsRulers.value) },
-      { label: t('menu.grid'), run: () => (showsGrid.value = !showsGrid.value) },
-      { label: t('menu.gridLarger'), run: () => setGrid({ spacing: gridSpacing.value * 2 }) },
-      { label: t('menu.gridSmaller'), run: () => setGrid({ spacing: Math.max(4, gridSpacing.value / 2) }) },
-      { label: t('menu.gridSubdivide'), run: () => setGrid({ subdivisions: gridSubdivisions.value === 4 ? 2 : 4 }) },
+      { label: t('menu.rulers'), command: 'view.rulers', run: () => (showsRulers.value = !showsRulers.value) },
+      { label: t('menu.grid'), command: 'view.grid', run: () => (showsGrid.value = !showsGrid.value) },
+      { label: t('menu.gridLarger'), command: 'view.gridLarger', run: () => setGrid({ spacing: gridSpacing.value * 2 }) },
+      { label: t('menu.gridSmaller'), command: 'view.gridSmaller', run: () => setGrid({ spacing: Math.max(4, gridSpacing.value / 2) }) },
+      { label: t('menu.gridSubdivide'), command: 'view.gridSubdivide', run: () => setGrid({ subdivisions: gridSubdivisions.value === 4 ? 2 : 4 }) },
     ],
   },
   {
     label: t('menu.help'),
     items: [
-      { label: t('menu.checkUpdates'), run: () => void checkForUpdates() },
+      { label: t('menu.checkUpdates'), command: 'help.checkUpdates', run: () => void checkForUpdates() },
       {
         label: t('menu.installUpdate'),
+        command: 'help.installUpdate',
         run: () => void installUpdate(),
         enabled: () => updateAvailable.value !== null,
       },
@@ -356,52 +391,37 @@ function isTextEntry(target: EventTarget | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || element.isContentEditable
 }
 
+/**
+ * One key press, resolved through the keyboard map.
+ *
+ * The handler is a lookup now rather than a chain of comparisons: which key means which command is
+ * `web/src/model/keymap.ts`'s business, and what a command *does* is the menu's. What is left here
+ * is the part no binding can express — the arrows nudging the active layer, Enter applying a crop,
+ * Escape cancelling one — and the rule that a modifier combination nobody bound does nothing rather
+ * than falling through to whatever the bare key would have done.
+ */
 function onKeyDown(event: KeyboardEvent): void {
   if (isTextEntry(event.target)) return
+  // While a chord is being recorded the sheet is listening for the keys themselves.
+  if (recordingCommand.value !== null) return
   if (openMenu.value !== null && event.key === 'Escape') {
     openMenu.value = null
     return
   }
 
-  if (event.ctrlKey || event.metaKey) {
-    const key = event.key.toLowerCase()
-    const shift = event.shiftKey
-    const run = (work: () => void) => {
-      event.preventDefault()
-      work()
-    }
-    if (key === 'z') return run(shift ? redo : undo)
-    if (key === 's') return run(() => void saveProject())
-    if (key === 'o') return run(() => void openProject())
-    if (key === 'e') return run(() => void exportPNG())
-    if (key === 'a') return run(selectAll)
-    if (key === 'd') return run(deselect)
-    if (key === 'i' && shift) return run(invertSelection)
-    if (key === 'g') return run(shift ? ungroupSelected : groupSelected)
-    if (key === 'j') return run(duplicateSelected)
-    if (key === 'n' && shift) return run(addBlankLayer)
-    if (key === '0') return run(fit)
-    if (key === '1') return run(() => zoomTo(1))
-    if (key === 'e') return run(() => void exportPNG())
-    if (key === 'c' && shift) return run(() => void copyMerged())
-    if (key === ']') return run(() => moveActive(1))
-    if (key === '[') return run(() => moveActive(-1))
-    if (key === '=' || key === '+') return run(() => zoomBy(1.25))
-    if (key === '-') return run(() => zoomBy(1 / 1.25))
+  const command = commandForEvent(keymap.value, event)
+  if (command) {
+    const item = itemsByCommand.value.get(command)
+    if (!item) return
+    if (item.enabled && !item.enabled()) return
+    event.preventDefault()
+    item.run?.()
     return
   }
+  // Ctrl+Delete is not Delete. A combination that means nothing here must not be read as the key it
+  // happens to be pressed with, which is how a stray Ctrl+Backspace would clear a layer.
+  if (event.ctrlKey || event.metaKey || event.altKey) return
 
-  if (event.key.toLowerCase() === 'f' && !event.ctrlKey && !event.metaKey) {
-    event.preventDefault()
-    paletteOpen.value = true
-    return
-  }
-  const upper = event.key.toUpperCase()
-  if (SHORTCUT_CYCLES[upper]) {
-    event.preventDefault()
-    cycleTool(upper)
-    return
-  }
   // The arrow keys nudge the active layer by a pixel, or by ten with Shift, as Photoshop's do.
   if (event.key.startsWith('Arrow')) {
     const step = event.shiftKey ? 10 : 1
@@ -521,6 +541,7 @@ onBeforeUnmount(() => {
     <FilterSheet />
     <RecoverySheet />
     <CommandPalette :commands="commands" />
+    <ShortcutSheet />
   </div>
 </template>
 

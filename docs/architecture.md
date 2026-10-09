@@ -163,6 +163,30 @@ endpoint at the release page, so a published build looks for updates in a differ
 development one — and a developer's `pnpm tauri build` needs no key at all, which is what stops one
 person's machine from being part of the release process.
 
+## The keyboard is data, not a chain of comparisons
+
+Every command and the key it ships with is one table (`web/src/model/keymap.ts`). The menus name their
+command and read the chord for their labels out of it, the shortcut sheet edits it, and the window's
+key handler resolves a press through it — which is what makes a rebind appear on a menu label without
+anyone touching the menu.
+
+Two rules are worth keeping in mind when changing it:
+
+- **A chord belongs to one menu command.** Assigning a key takes it away from whatever had it, and
+  the sheet names what lost it. Two commands on one key is a keyboard nobody can predict, and it was
+  already true here: merge and export PNG were both on `Ctrl+E`, and the handler had to pick one,
+  every time. Tools are exempt, and deliberately — three of them sharing `R` *is* the cycle, and which
+  tools cycle together is read from the bindings rather than from the tool table, so rebinding one
+  moves it into its new group.
+- **One command has a fixed alternate that cannot be rebound.** Delete clears a layer and Backspace
+  does too: remapping one of a pair would leave the other working, which is a worse surprise than not
+  allowing the rebind. `CommandDefinition.alt` is that list, and the sheet's footnote is where the
+  keyboard's remaining fixed keys (arrows, Enter, Escape) are stated.
+
+Only overrides are stored in local storage, never the resolved map: a default changed in a later build
+then reaches someone who has rebound something else, instead of being pinned to what the default used
+to be.
+
 ## GPU failures are silent by default
 
 `Compositor.create` reads the shader's compilation info and wraps pipeline creation in a validation

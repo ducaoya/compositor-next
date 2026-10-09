@@ -50,6 +50,10 @@ either editor opens in the other.
   [Updating](#updating).
 - **A Photoshop-shaped interface**, in English or Simplified Chinese, with user-installable
   language packs.
+- **Every shortcut is remappable.** *Edit › Keyboard Shortcuts…* lists every command this build has:
+  click a key, press the ones you want it on. A key that was already taken is released from whatever
+  had it, and the one chord two commands turned out to share — merge and export PNG, both on Ctrl+E —
+  has been split.
 - **Everything the file holds round-trips**, even where this build cannot yet render it.
 
 ### What it will not open, and why
@@ -105,7 +109,7 @@ Four things are here that the plan did not call for, because the port turned out
 and TIFF import, mip chains for both of the frame's downsamples, and the retouch tools beyond clone
 stamp and spot healing — Blur, Sharpen, Smudge, Dodge, Burn and Sponge.
 
-**Where it stands:** version 0.1.0, with 274 TypeScript tests, 43 Rust tests, and 25 pixel cases that
+**Where it stands:** version 0.1.0, with 305 TypeScript tests, 43 Rust tests, and 26 pixel cases that
 drive a real build in headless Chrome. `pnpm check` runs the first two; the pixel cases need a dev
 server and `scripts/dev-browser.mjs`, which [docs/architecture.md](docs/architecture.md) explains.
 

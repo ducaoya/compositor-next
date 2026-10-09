@@ -41,7 +41,10 @@ export interface ToolDefinition {
   id: ToolId
   /** A `tools.*` translation key. */
   labelKey: string
-  /** The Photoshop shortcut, shown in the tooltip and bound on the keyboard. */
+  /**
+   * The key this tool ships bound to: its default in the keyboard map, shown in the tooltip and
+   * bound on the keyboard through `web/src/model/keymap.ts`.
+   */
   shortcut: string
   /** SVG markup drawn inside a 24×24 viewBox. */
   icon: string
@@ -272,16 +275,6 @@ export const TOOLS: ToolDefinition[] = [
 ]
 
 export const TOOLS_BY_ID = new Map(TOOLS.map((tool) => [tool.id, tool]))
-
-/** Toolbar tools that share a keyboard shortcut, in the order pressing it cycles them. */
-export const SHORTCUT_CYCLES: Record<string, ToolId[]> = TOOLS.reduce<Record<string, ToolId[]>>(
-  (cycles, tool) => {
-    const key = tool.shortcut
-    if (tool.implemented && key) cycles[key] = [...(cycles[key] ?? []), tool.id]
-    return cycles
-  },
-  {},
-)
 
 /** Tools that paint with the brush tip, and so read the brush options. */
 export const BRUSH_TOOLS: ReadonlySet<ToolId> = new Set<ToolId>([

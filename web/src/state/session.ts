@@ -50,7 +50,8 @@ import {
   type Mask,
   type SelectionMode,
 } from '../model/selectionMask'
-import { SHORTCUT_CYCLES, type ToolId } from '../model/tools'
+import { type ToolId } from '../model/tools'
+import { toolsForChord } from '../model/keymap'
 import {
   DEFAULT_LIMITS,
   blendModeOf,
@@ -126,6 +127,7 @@ import {
   type Backend,
   type OpenedProject,
 } from './backend'
+import { keymap, resetKeymap, setBinding } from './keymap'
 export interface ViewState {
   zoom: number
   panX: number
@@ -874,10 +876,15 @@ export function selectTool(id: ToolId): void {
   erasing.value = id === 'eraser'
 }
 
-/** Cycles the tools that share a shortcut, as pressing the key repeatedly does in Photoshop. */
-export function cycleTool(shortcut: string): void {
-  const cycle = SHORTCUT_CYCLES[shortcut]
-  if (!cycle || cycle.length === 0) return
+/**
+ * Cycles the tools bound to one chord, as pressing the key repeatedly does in Photoshop.
+ *
+ * The group is read from the keyboard map rather than from the tool table, so rebinding a tool moves
+ * it into whatever group its new key names — which is most of what makes a rebind worth doing.
+ */
+export function cycleTool(chord: string): void {
+  const cycle = toolsForChord(keymap.value, chord)
+  if (cycle.length === 0) return
   const at = cycle.indexOf(tool.value)
   selectTool(cycle[(at + 1) % cycle.length])
 }
@@ -3799,6 +3806,12 @@ if (typeof window !== 'undefined') {
       checkForUpdates,
       installUpdate,
       setUpdateEndpoint,
+      get keymap() {
+        return keymap.value
+      },
+      setBinding,
+      resetKeymap,
+      report,
       checkForRecovery,
       dismissRecovery,
       get recoveryPrompt() {

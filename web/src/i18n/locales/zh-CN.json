@@ -74,7 +74,9 @@
     "lensCorrection": "镜头校正…",
     "removeBackground": "移除背景",
     "checkUpdates": "检查更新",
-    "installUpdate": "安装更新…"
+    "installUpdate": "安装更新…",
+    "mergeLayers": "合并图层",
+    "keyboardShortcuts": "键盘快捷键…"
   },
   "tools": {
     "move": "移动",
@@ -569,5 +571,17 @@
     "installing": "正在安装更新…",
     "installed": "更新已安装，正在重启。",
     "installFailed": "更新安装失败，未做任何改动。"
+  },
+  "shortcuts": {
+    "title": "键盘快捷键",
+    "hint": "点一下按键框，再按下想绑定的组合键。Backspace 取消绑定，Escape 放弃。",
+    "tools": "工具",
+    "press": "请按键…",
+    "cleared": "未设置",
+    "takenFrom": "{names} 失去了这个按键。",
+    "conflict": "有多个命令使用 {chords}。",
+    "fixed": "方向键微调当前图层；Enter 应用裁剪，Escape 取消裁剪。这几项不可改。",
+    "reset": "恢复默认",
+    "done": "完成"
   }
 }
