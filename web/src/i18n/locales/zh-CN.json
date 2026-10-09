@@ -268,7 +268,18 @@
     "externalChangeKept": "该工程已在磁盘上变更。你未保存的修改已保留。",
     "cloneSource": "请先按住 Alt 单击，指定仿制图章的取样位置。",
     "paintRefused": "该图层没有可用于修图的像素。",
-    "contentAwareNoSource": "未选中且不透明的像素不足，无法合成填充。请缩小选区，并保留一些周围图像。"
+    "contentAwareNoSource": "未选中且不透明的像素不足，无法合成填充。请缩小选区，并保留一些周围图像。",
+    "rawUnsupported": "{name} 是相机 RAW 文件，本版本没有 RAW 解码器。最接近的纯 Rust 实现为 LGPL-2.1，与本项目 MIT 许可不兼容。",
+    "heicUnsupported": "{name} 是 HEIC 图像，需要由平台提供解码器。macOS 与 Windows 都有，但本版本尚未接入。",
+    "tiffUnreadable": "{name} 是本版本无法读取的 TIFF：{problem}",
+    "tiffProblem": {
+      "not-tiff": "它不是 TIFF",
+      "truncated": "它在描述的数据出现之前就结束了",
+      "unsupported-compression": "它使用的压缩方式本读取器不支持",
+      "unsupported-layout": "它使用的排布方式本读取器不支持",
+      "unsupported-samples": "它的色彩模式或位深不受支持",
+      "bad-predictor": "它使用的预测器本读取器无法还原"
+    }
   },
   "error": {
     "invalid": "这不是有效的 Compositor 工程，或其中的元数据已损坏。",

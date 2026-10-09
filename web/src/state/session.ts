@@ -104,6 +104,7 @@ import {
 } from '../render/filters'
 import { blurred } from '../render/retouch'
 import { RETOUCH_TOOLS } from '../model/tools'
+import { decodeImport, ImportError } from '../io/imports'
 import type { ToneRange } from '../render/retouch'
 import {
   assetKey,
@@ -3091,21 +3092,44 @@ async function importWhatever(
     for (const file of files) {
       try {
         if (first && !manifest.value) {
-          await newProjectFromImage(file.blob)
+          await newProjectFromImage(file.blob, file.name)
           first = false
         }
-        const bitmap = await createImageBitmap(file.blob)
+        const bitmap = await decodeImport(file.blob, file.name)
         await addImageLayer(bitmap, file.name.replace(/\.[^.]+$/, ''))
       } catch (error) {
-        message.value = t('message.imageUnreadable', { name: file.name })
+        message.value = importMessage(error, file.name)
         console.error(error)
       }
     }
   })
 }
 
-async function newProjectFromImage(blob: Blob): Promise<void> {
-  const bitmap = await createImageBitmap(blob)
+/**
+ * What to tell someone about a file that did not open.
+ *
+ * The formats this build refuses are refused for reasons worth passing on — a licence, a missing
+ * platform decoder, a TIFF using a compression this reader does not have — and "could not be read as
+ * an image" throws all of that away and leaves someone with a file they cannot explain.
+ */
+function importMessage(error: unknown, name: string): string {
+  if (error instanceof ImportError) {
+    if (error.failure.kind === 'refused') {
+      const key = error.failure.reason === 'raw' ? 'message.rawUnsupported' : 'message.heicUnsupported'
+      return t(key, { name })
+    }
+    if (error.failure.kind === 'tiff') {
+      return t('message.tiffUnreadable', {
+        name,
+        problem: t(`message.tiffProblem.${error.failure.problem}`),
+      })
+    }
+  }
+  return t('message.imageUnreadable', { name })
+}
+
+async function newProjectFromImage(blob: Blob, name: string): Promise<void> {
+  const bitmap = await decodeImport(blob, name)
   const width = bitmap.width
   const height = bitmap.height
   bitmap.close()
@@ -3293,6 +3317,7 @@ if (typeof window !== 'undefined') {
       magicWandAt,
       marqueeSelection,
       applySelectionMode,
+      importDroppedFiles,
       selectAll,
       deselect,
       invertSelection,

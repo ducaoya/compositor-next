@@ -268,7 +268,18 @@
     "externalChangeKept": "That project changed on disk. Your unsaved edits were kept.",
     "cloneSource": "Alt-click where Clone Stamp should copy from first.",
     "paintRefused": "This layer has no pixels to rework.",
-    "contentAwareNoSource": "Not enough unselected, opaque image pixels to synthesize a fill. Use a smaller selection with some surrounding image."
+    "contentAwareNoSource": "Not enough unselected, opaque image pixels to synthesize a fill. Use a smaller selection with some surrounding image.",
+    "rawUnsupported": "{name} is a camera RAW file, and this build has no RAW decoder. The closest pure-Rust one is LGPL-2.1, which this MIT project cannot link.",
+    "heicUnsupported": "{name} is a HEIC image, which needs a decoder from the platform. macOS has one and Windows has one, but reaching either from here is not done yet.",
+    "tiffUnreadable": "{name} is a TIFF this build cannot read: {problem}",
+    "tiffProblem": {
+      "not-tiff": "it is not a TIFF",
+      "truncated": "it ends before the data it describes",
+      "unsupported-compression": "it uses a compression this reader does not have",
+      "unsupported-layout": "it uses a layout this reader does not walk",
+      "unsupported-samples": "its colour model or sample depth is not supported",
+      "bad-predictor": "it uses a predictor this reader does not undo"
+    }
   },
   "error": {
     "invalid": "This is not a valid Compositor project, or its metadata is damaged.",

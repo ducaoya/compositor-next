@@ -1053,6 +1053,68 @@ const CASES = [
   },
 
   {
+    name: 'importing an SVG and a TIFF opens them',
+    // The webview refuses both formats, so both go through code in this project: SVG is rasterised
+    // through an `img` and TIFF through the reader in `web/src/io/tiff.ts`. A case that only checked
+    // "a layer appeared" would pass on an import that produced a blank rectangle, so both halves
+    // look for the colour the file was drawn in.
+    probe: `(async () => { ${PRELUDE}
+      const teal = (h) => h >= 150 && h <= 180
+      const green = (h) => h >= 110 && h <= 130
+
+      const before = await freshDocument()
+      const tealBefore = findByHue(before, teal, 4, 0.3).length
+      const greenBefore = findByHue(before, green, 4, 0.3).length
+
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="96" height="64">'
+        + '<rect width="96" height="64" fill="#20c0a0"/></svg>'
+      await s.importDroppedFiles([new File([svg], 'mark.svg', { type: 'image/svg+xml' })])
+      await wait(1400)
+      const afterSvg = await s.renderAndRead()
+      const tealAfter = findByHue(afterSvg, teal, 4, 0.3).length
+
+      // A four-by-four TIFF, as bytes: header, one IFD, the bits-per-sample list that does not fit in
+      // an entry, and forty-eight bytes of green. Written out rather than built here because the
+      // reader's own tests already build fixtures in \`web/src/io/__tests__/imports.test.ts\`, and two
+      // builders for one format is two things to get wrong — this one is the output of that one.
+      const tiffHex =
+        '49492a0008000000090000010300010000000400000001010300010000000400000002010300030000007a000000'
+        + '0301030001000000010000000601030001000000020000001101040001000000800000001501030001000000'
+        + '030000001601030001000000040000001701040001000000300000000000000008000800080000ff0000ff'
+        + '0000ff0000ff0000ff0000ff0000ff0000ff0000ff0000ff0000ff0000ff0000ff0000ff0000ff0000ff00'
+      const tiff = new Uint8Array(tiffHex.match(/../g).map((pair) => Number.parseInt(pair, 16)))
+      const layersBeforeTiff = s.manifest.layers.length
+      s.message = null
+      await s.importDroppedFiles([new File([tiff], 'pixels.tiff', { type: 'image/tiff' })])
+      await wait(1400)
+      const afterTiff = await s.renderAndRead()
+      const greenAfter = findByHue(afterTiff, green, 4, 0.3).length
+      const tiffMessage = s.message
+      const tiffLayers = s.manifest.layers.length
+
+      // And a RAW file is refused by name rather than failing as "could not be read".
+      const layersBefore = s.manifest.layers.length
+      s.message = null
+      await s.importDroppedFiles([new File([new Uint8Array([1, 2, 3, 4])], 'shot.CR2', { type: 'application/octet-stream' })])
+      await wait(600)
+      const refused = s.manifest.layers.length === layersBefore && Boolean(s.message)
+
+      return {
+        pass: tealBefore === 0 && tealAfter >= 4 && greenBefore === 0 && greenAfter >= 2 && refused,
+        detail: {
+          teal: { before: tealBefore, after: tealAfter },
+          green: { before: greenBefore, after: greenAfter },
+          layersAfterTheSvg: layersBeforeTiff,
+          layersAfterTheTiff: tiffLayers,
+          tiffMessage,
+          rawRefusedWithAMessage: refused,
+          message: s.message,
+        },
+      }
+    })()`,
+  },
+
+  {
     name: 'gaussian blur smooths',
     probe: `(async () => { ${PRELUDE}
       const r = await setup('Gaussian Blur', (a) => { a.blurRadius = 24 })

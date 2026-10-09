@@ -1,0 +1,146 @@
+This session's task: write a TIFF reader for the compositor-next editor, as one new self-contained
+module inside the new directory `web/src/io/tiff/` and nowhere else. Do not run git commands. Do not
+commit.
+
+## Repository
+
+`C:/Users/ducao/Desktop/ducaoya/compositor-next` — a cross-platform image editor: Tauri 2 + Vue 3 +
+WebGPU. The webview decodes whatever a browser decodes, and a browser refuses TIFF; the reference
+macOS app got TIFF from the platform, which Windows does not give us, so this build reads it itself.
+
+Tests are vitest, run from the `web` package: `pnpm --dir web test` (or, for just your files,
+`cd web && npx vitest run src/io/tiff`). `web/vite.config.ts` sets
+`test: { environment: 'node', include: ['src/**/*.test.ts'] }`, so **your code must not touch
+`document`, `window`, `OffscreenCanvas`, `ImageData`, `Blob` or any other DOM API** — pure functions
+over `Uint8Array`s only. That is the point: a TIFF reader is a parser, and a parser is testable
+without a browser. The caller turns your RGBA output into a canvas.
+
+TypeScript is `strict` with `noUnusedLocals` and `noUnusedParameters`, and `pnpm --dir web build`
+runs `vue-tsc --noEmit`, which will fail on any type error.
+
+## House style — follow it exactly
+
+- **British spelling** in code, comments and names ("colour", "neighbour", "centre").
+- Comments explain **why**, in prose, in the house voice: full sentences, no bullet lists inside
+  code, no "TODO", no restating what the next line says. Look at `web/src/render/retouch/heal.ts`
+  and `web/src/render/filters/lens.ts` for the register. Every decision the format left open — which
+  tags to accept, what to do with one you do not know, why a default was chosen — gets a sentence.
+- No new dependencies. Nothing outside your directory. Do not touch `web/src/render/`.
+- Test names read as statements of fact ("a two-strip file with a horizontal predictor reads as one
+  image"), not "should ...".
+- No emoji anywhere.
+
+## What to build
+
+A TIFF reader, from the specification. There is no reference implementation in this project to port —
+the macOS app asked the operating system — so this is written against TIFF 6.0 and its two common
+compression extensions. Read what you need from https://www.itu.int/rec/T-REC-T.871 if you can reach
+it; if you cannot, work from the format description in your own knowledge and say in the comments
+which parts of the specification a given decision comes from.
+
+### `types.ts`
+
+```ts
+/** A rectangle of pixels the way a canvas stores them: RGBA, eight bits a channel, top row first. */
+export interface Rgba {
+  data: Uint8ClampedArray
+  width: number
+  height: number
+}
+```
+
+Mirrors `web/src/render/retouch/types.ts` and `web/src/render/filters/types.ts`; keep the same shape
+so a caller can move a buffer between them without a conversion.
+
+### `read.ts`
+
+```ts
+/** What went wrong, in the terms the caller needs to report it. */
+export type TiffProblem =
+  | 'not-tiff'
+  | 'truncated'
+  | 'unsupported-compression'
+  | 'unsupported-layout'
+  | 'unsupported-samples'
+  | 'bad-predictor'
+
+/** Reads a TIFF into RGBA. Throws a `TiffError` whose `problem` says why it could not. */
+export function readTiff(bytes: Uint8Array): Rgba
+
+export class TiffError extends Error {
+  readonly problem: TiffProblem
+}
+```
+
+What to support, because these are what real files use:
+
+- **Header**: both byte orders (`II` little-endian, `MM` big-endian), and the classic TIFF magic 42.
+  BigTIFF's magic 43 is not supported — say so with `'unsupported-layout'` rather than reading it
+  wrong. (The plan for this project says TIFF 6.0; a BigTIFF is reported rather than misparsed.)
+- **IFD**: the first IFD, and the first *image* in it. A multi-page TIFF reads page one; say so.
+- **Layout**: strips (`StripOffsets`/`StripByteCounts`/`RowsPerStrip`) and tiles
+  (`TileOffsets`/`TileByteCounts`/`TileWidth`/`TileLength`).
+- **Compression**: 1 none, 5 LZW, 8 and 32946 Deflate (zlib), 32773 PackBits. Anything else is
+  `'unsupported-compression'`.
+- **Photometric**: 0 WhiteIsZero and 1 BlackIsZero (both greyscale), 2 RGB, 3 Palette, 5 CMYK
+  (converted to RGB the usual way). 4 transparency masks and 6 YCbCr are `'unsupported-samples'`.
+- **Samples**: 1 (grey), 3 (RGB), 4 (RGBA or CMYK). `ExtraSamples` says whether the fourth sample is
+  alpha; without it, treat a fourth sample as alpha anyway and say why that is the safer assumption.
+- **Bits**: 1, 2, 4, 8 and 16 bits a sample. Sub-byte greyscale and 16-bit samples are what scanner
+  and camera files use, and 16 bits must be scaled to eight by its high byte rather than truncated.
+- **Predictor**: 1 none, 2 horizontal differencing, applied after decompression and before unpacking.
+  Predictor 3 (floating point) is `'bad-predictor'`.
+- **Orientation**: read it and *not* apply it — the app's own transform handles rotation — but return
+  nothing about it either way, and say in the comment that it is deliberately ignored because the
+  caller would otherwise see a picture rotated twice.
+- **Resolution and colour profile**: ignore them, and say so in one sentence rather than silently.
+
+Write the LZW decoder carefully: TIFF's variant starts with a code width of nine bits, is
+"early change" (the width grows one code early, at 511/1023/2047), and has the 256 clear code and
+257 end-of-information code. Getting early change wrong produces a picture that looks almost right,
+so test the code-width transitions specifically.
+
+Deflate: there is no dependency to add, so use the platform's own — `DecompressionStream('deflate')`
+is a browser API and therefore not allowed here. So **write the inflate yourself** (fixed and dynamic
+Huffman, the LZ77 window). That is the largest single piece of this task and it is worth doing
+properly rather than shipping a reader that cannot open a zip-compressed file.
+
+### `index.ts`
+
+Re-export the three modules' public surface.
+
+## Tests
+
+`web/src/io/tiff/__tests__/`, vitest, **with fixtures built in the test source**. There are no TIFF
+files in this repository and you must not add any: write a small builder that assembles a file from
+tag values and strip bytes, and build each fixture with it. That builder is the most valuable thing
+you will write here — it is what makes the reader testable at all — so make it readable and say so in
+its comment.
+
+Assertions worth having, at least:
+
+- a one-strip 8-bit RGB file reads its exact pixels, at the right size, with alpha 255;
+- both byte orders give identical pixels from the same image;
+- a two-strip file with a horizontal predictor reads as one image, and the predictor is applied to
+  the *image* rows rather than to each strip's rows;
+- LZW: a file compressed by your own encoder round-trips, **and** a hand-written code stream that
+  crosses 511 and 1023 exercises the early-change rule;
+- Deflate: your own fixed-Huffman and dynamic-Huffman streams both round-trip;
+- PackBits: a run, a literal run, and a no-op byte;
+- a 16-bit greyscale file scales by the high byte;
+- a 1-bit greyscale file expands four pixels a byte;
+- a palette file maps through the colour table;
+- a tiled file reads as one image;
+- the four refusals: a JPEG-compressed file, a BigTIFF, a YCbCr file, and a truncated one each throw
+  with the right `problem`;
+- a file with fewer bytes than its header claims throws `'truncated'` rather than reading past the
+  end — the one bug class a parser must not have.
+
+Keep the fixtures small (4×4, 16×16) so the suite stays fast.
+
+## Finishing
+
+1. `cd web && npx vitest run src/io/tiff` until green, then `pnpm --dir web test` for the whole suite.
+2. `cd web && npx vue-tsc --noEmit` and fix any type error.
+3. Report back concisely: files created, how many tests, which parts of the specification you had to
+   decide yourself, and anything you are unsure about or knowingly left out.
