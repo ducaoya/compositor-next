@@ -1053,6 +1053,48 @@ const CASES = [
   },
 
   {
+    name: 'an update check compares versions and reports',
+    // The manifest is served from a `data:` URL rather than a real server so the case does not depend
+    // on anything running outside it, but it goes through the same `fetch`, the same parse and the
+    // same comparison. What this does *not* test is installation: downloading a bundle and checking
+    // its signature against a key compiled into the app is the shell's job, and a webview cannot
+    // replace the binary it is running inside. The README says what that half needs.
+    probe: `(async () => { ${PRELUDE}
+      const serve = (body) => 'data:application/json,' + encodeURIComponent(JSON.stringify(body))
+      const bundle = { url: 'https://example.invalid/compositor.msi', signature: 'sig' }
+
+      await freshDocument()
+      s.setUpdateEndpoint(serve({ releases: [
+        { version: '0.0.1' },
+        { version: '99.0.0', platforms: { 'windows-x86_64': bundle } },
+      ] }))
+      await s.checkForUpdates()
+      const available = s.message
+
+      // A dev build in a browser is version 0.0.0-dev, which every release outranks, so the
+      // "nothing newer" path is exercised with a manifest that offers nothing at all.
+      s.setUpdateEndpoint(serve({ releases: [] }))
+      await s.checkForUpdates()
+      const upToDate = s.message
+
+      // A release with no bundle for this platform is offered as news and not as a download.
+      s.setUpdateEndpoint(serve({ releases: [{ version: '99.0.0', platforms: { 'linux-x86_64': bundle } }] }))
+      await s.checkForUpdates()
+      const noBundle = s.message
+
+      s.setUpdateEndpoint('data:application/json,not json at all')
+      await s.checkForUpdates()
+      const failed = s.message
+
+      return {
+        pass: /99\.0\.0/.test(available ?? '') && !/is available/.test(upToDate ?? '')
+          && /no build/.test(noBundle ?? '') && /could not be reached/.test(failed ?? ''),
+        detail: { available, upToDate, noBundle, failed },
+      }
+    })()`,
+  },
+
+  {
     name: 'importing an SVG and a TIFF opens them',
     // The webview refuses both formats, so both go through code in this project: SVG is rasterised
     // through an `img` and TIFF through the reader in `web/src/io/tiff.ts`. A case that only checked

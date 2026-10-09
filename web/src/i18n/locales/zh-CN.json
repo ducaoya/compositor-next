@@ -72,7 +72,8 @@
     "bloomGlow": "辉光…",
     "tonalContrast": "色调对比…",
     "lensCorrection": "镜头校正…",
-    "removeBackground": "移除背景"
+    "removeBackground": "移除背景",
+    "checkUpdates": "检查更新"
   },
   "tools": {
     "move": "移动",
@@ -542,5 +543,11 @@
     "lightenCorners": "改为提亮四角",
     "gaussianNoise": "高斯分布",
     "wholeLayer": "未建立选区时，滤镜作用于整个图层。"
+  },
+  "update": {
+    "upToDate": "Compositor {version} 已是最新版本。",
+    "available": "有新版本 {version}，当前为 {current}。",
+    "noBundle": "有新版本 {version}，但没有适用于当前平台的构建。",
+    "checkFailed": "无法连接到更新服务器。"
   }
 }

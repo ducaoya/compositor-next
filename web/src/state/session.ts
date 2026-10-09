@@ -105,6 +105,7 @@ import {
 import { blurred } from '../render/retouch'
 import { RETOUCH_TOOLS } from '../model/tools'
 import { decodeImport, ImportError } from '../io/imports'
+import { bundleFor, newerRelease, platformKey, type UpdateRelease } from '../model/update'
 import type { ToneRange } from '../render/retouch'
 import {
   assetKey,
@@ -616,6 +617,8 @@ export function useSession() {
     openFilterSheet,
     closeFilterSheet,
     applyFilter,
+    checkForUpdates,
+    setUpdateEndpoint,
     lassoPolygonal,
     lassoPoints,
     showsRulers,
@@ -3105,6 +3108,72 @@ async function importWhatever(
   })
 }
 
+let updateEndpoint = 'http://localhost:8787/latest.json'
+
+/**
+ * Points the update check somewhere else, for a development server or a test.
+ *
+ * The endpoint is a variable rather than a constant because where a build looks for updates is a
+ * question about the build and not about the code: a development build points at whatever is on the
+ * laptop, and a release build points at whatever publishes the signed bundles.
+ */
+export function setUpdateEndpoint(url: string): void {
+  updateEndpoint = url
+}
+
+/**
+ * Asks what the newest release is and says whether it is worth having.
+ *
+ * The check is here and the *installation* is not, and that is a deliberate line rather than an
+ * unfinished one: installing an update means downloading a bundle and verifying its signature
+ * against a public key compiled into the app, which is the shell's job — a webview cannot replace
+ * the binary it is running inside. What can be built and tested without a signing key is the
+ * decision, which is where the edge cases are (`compareVersions` treats 0.9.0 as older than 0.10.0
+ * and a release as newer than its own pre-releases), so that is what this does and what
+ * `web/src/model/update.ts` is tested for.
+ *
+ * The README covers the other half: generating a key pair, signing the bundles, and pointing this
+ * endpoint at wherever they are published.
+ */
+export async function checkForUpdates(): Promise<void> {
+  try {
+    const current = await applicationVersion()
+    const response = await fetch(updateEndpoint, { cache: 'no-store' })
+    if (!response.ok) throw new Error(String(response.status))
+    const body = (await response.json()) as { releases?: UpdateRelease[] } | UpdateRelease[]
+    const releases = Array.isArray(body) ? body : (body.releases ?? [])
+    const release = newerRelease(releases, current)
+    if (!release) {
+      report(t('update.upToDate', { version: current }))
+      return
+    }
+    const bundle = bundleFor(release, platformKey(navigator.userAgent))
+    report(
+      bundle
+        ? t('update.available', { version: release.version, current })
+        : t('update.noBundle', { version: release.version }),
+    )
+  } catch {
+    report(t('update.checkFailed'))
+  }
+}
+
+/**
+ * The app's own version, from the shell.
+ *
+ * A dev build in a browser has no shell to ask, and `0.0.0-dev` is the honest answer there: it is
+ * older than every release, so a browser preview is always offered whatever exists, which is what
+ * someone developing wants to see.
+ */
+async function applicationVersion(): Promise<string> {
+  try {
+    const { getVersion } = await import('@tauri-apps/api/app')
+    return await getVersion()
+  } catch {
+    return '0.0.0-dev'
+  }
+}
+
 /**
  * What to tell someone about a file that did not open.
  *
@@ -3299,6 +3368,8 @@ if (typeof window !== 'undefined') {
       openFilterSheet,
       closeFilterSheet,
       applyFilter,
+      checkForUpdates,
+      setUpdateEndpoint,
       mergeDown,
       mergeLayers,
       resizeCanvas,

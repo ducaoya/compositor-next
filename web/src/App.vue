@@ -48,6 +48,7 @@ import {
   installLanguagePack,
   openEffectsSheet,
   openFilterSheet,
+  checkForUpdates,
   invertSelection,
   loadLanguagePacks,
   moveActive,
@@ -276,7 +277,10 @@ const menus = computed<Menu[]>(() => [
   },
   {
     label: t('menu.help'),
-    items: [{ label: t('menu.about'), enabled: () => false }],
+    items: [
+      { label: t('menu.checkUpdates'), run: () => void checkForUpdates() },
+      { label: t('menu.about'), enabled: () => false },
+    ],
   },
 ])
 

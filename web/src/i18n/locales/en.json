@@ -72,7 +72,8 @@
     "bloomGlow": "Bloom / Glow…",
     "tonalContrast": "Tonal Contrast…",
     "lensCorrection": "Lens Correction…",
-    "removeBackground": "Remove Background"
+    "removeBackground": "Remove Background",
+    "checkUpdates": "Check for Updates"
   },
   "tools": {
     "move": "Move",
@@ -542,5 +543,11 @@
     "lightenCorners": "Lighten the corners instead",
     "gaussianNoise": "Gaussian",
     "wholeLayer": "With no selection, the filter runs over the whole layer."
+  },
+  "update": {
+    "upToDate": "Compositor {version} is the newest release.",
+    "available": "{version} is available, and you have {current}.",
+    "noBundle": "{version} is available, but it has no build for this platform.",
+    "checkFailed": "The update server could not be reached."
   }
 }
