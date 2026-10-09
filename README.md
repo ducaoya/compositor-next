@@ -71,6 +71,32 @@ than one that says it cannot be opened.
 - **Installing an update.** *Checking* for one is implemented and tested; downloading a signed bundle
   and replacing the running binary is the shell's job and is not wired up. See [Updating](#updating).
 
+## Status
+
+The rewrite this project was built to was cut into three tiers, each one a shippable product. Tier 1
+(the whole chain — read and write the format, composite, paint, select, import, export, undo) and
+Tier 2 (masks, the twelve adjustment layers, transforms, layer effects, the rest of the tools) are
+complete. Tier 3 is partly done.
+
+| Tier | State |
+|---|---|
+| **1 — the whole chain** | complete. `.comp` versions 1–11, 24 blend modes, painting, selections, import and export, undo throughout. |
+| **2 — everyday use** | complete but for the Type tool: layer and clipping masks, twelve adjustment layers, transforms with snapping and guides, the Magic Wand, gradients, shapes, six layer effects, drag-and-drop import. |
+| **3 — feature parity** | partial: Content-Aware Fill, Clone Stamp, Spot Healing, Smudge, Vignette, Bloom/Glow, Tonal Contrast, Lens Correction, a command palette, Hue/Saturation's colour-range bands, rulers and the pixel grid. |
+
+What is left of Tier 3 is [Not yet](#not-yet) and
+[What it will not open](#what-it-will-not-open-and-why): PSD and PSB, selecting a subject, the Type
+tool, Camera Raw, Remove Background, Liquify, Dither, shortcut remapping, a shell thumbnail handler,
+and the install half of updating.
+
+Four things are here that the plan did not call for, because the port turned out to need them: SVG
+and TIFF import, mip chains for both of the frame's downsamples, and the retouch tools beyond clone
+stamp and spot healing — Blur, Sharpen, Smudge, Dodge, Burn and Sponge.
+
+**Where it stands:** version 0.1.0, with 263 TypeScript tests, 35 Rust tests, and 24 pixel cases that
+drive a real build in headless Chrome. `pnpm check` runs the first two; the pixel cases need a dev
+server and `scripts/dev-browser.mjs`, which [docs/architecture.md](docs/architecture.md) explains.
+
 ## Getting started
 
 Requirements: [Rust](https://rustup.rs) (the MSVC toolchain on Windows), Node 22+, pnpm, and the
@@ -94,7 +120,7 @@ The other scripts:
 |---|---|
 | `pnpm check` | Every Rust and TypeScript test |
 | `pnpm build` | The frontend bundle |
-| `pnpm tauri build` | A signed-installable desktop bundle |
+| `pnpm tauri build` | A desktop bundle to install |
 | `node scripts/make-sample-comp.mjs` | Regenerates `examples/sample.comp` |
 | `node scripts/dev-browser.mjs` | Headless Chrome with WebGPU, for scripted interface checks |
 
