@@ -357,24 +357,138 @@ export interface RangeAdjustment {
   lightness?: number
 }
 
-function rangeAdjustments(adjustment: LayerAdjustment): Partial<Record<ColorRange, RangeAdjustment>> {
-  const fromSettings = adjustment.hsvSettings?.adjustments
-  if (fromSettings && Object.keys(fromSettings).length > 0) return fromSettings
-  // Without per-range settings, the master values are the master. `hsvSettings` wins over the flat
-  // fields, which is the precedence `packAdjustment` uses — reading the flat ones here meant the
-  // panel's hue and saturation were written into the uniform and then ignored by the table, so the
-  // adjustment looked like it did nothing.
+/**
+ * The same three numbers after defaulting.
+ *
+ * The distinction is the point: a manifest written by hand or by a single slider drag is partial,
+ * and everything downstream of `rangeValues` is not. Nothing past this line can multiply an
+ * `undefined` by a weight and pack the resulting NaN into a byte.
+ */
+export interface ResolvedRange {
+  hue: number
+  saturation: number
+  lightness: number
+}
+
+function rangeAdjustments(adjustment: LayerAdjustment): Record<ColorRange, ResolvedRange> {
+  return Object.fromEntries(
+    COLOR_RANGES.map((range) => [range, rangeValues(adjustment, range)]),
+  ) as Record<ColorRange, ResolvedRange>
+}
+
+/** Nothing asked for, for a range a file said nothing about. */
+const NO_ADJUSTMENT: ResolvedRange = { hue: 0, saturation: 0, lightness: 0 }
+
+/**
+ * The master's three values, wherever the file put them.
+ *
+ * An adjustment written before the colour ranges existed holds them in the flat
+ * `hue`/`saturation`/`lightness` fields next to `colorize`, which is also what the uniform's
+ * colorize slot reads; the panel writes them to `adjustments.master` like any other range. Both
+ * are read here, the stored range winning, so neither shape is a special case downstream.
+ */
+export function masterValues(adjustment: LayerAdjustment): ResolvedRange {
+  const settings = adjustment.hsvSettings
+  const stored = settings?.adjustments?.master
   return {
-    master: {
-      hue: adjustment.hsvSettings?.hue ?? adjustment.hue ?? 0,
-      saturation: adjustment.hsvSettings?.saturation ?? adjustment.saturation ?? 0,
-      lightness: adjustment.hsvSettings?.lightness ?? adjustment.lightness ?? 0,
-    },
+    hue: stored?.hue ?? settings?.hue ?? adjustment.hue ?? 0,
+    saturation: stored?.saturation ?? settings?.saturation ?? adjustment.saturation ?? 0,
+    lightness: stored?.lightness ?? settings?.lightness ?? adjustment.lightness ?? 0,
   }
 }
 
-function bandsFor(adjustment: LayerAdjustment): Record<ColorRange, HueBand> {
-  return { ...DEFAULT_BANDS, ...(adjustment.hsvSettings?.bands ?? {}) }
+/**
+ * One range's three values, with everything the file left out defaulted.
+ *
+ * This is where "a range the panel only moved one slider on" is made safe: the other two come back
+ * as 0 rather than `undefined`, so the table builder never multiplies `undefined` by a weight.
+ * The master falls back to the flat fields; every other range falls back to nothing.
+ */
+export function rangeValues(adjustment: LayerAdjustment, range: ColorRange): ResolvedRange {
+  const stored = adjustment.hsvSettings?.adjustments?.[range]
+  const fallback = range === 'master' ? masterValues(adjustment) : NO_ADJUSTMENT
+  return {
+    hue: stored?.hue ?? fallback.hue,
+    saturation: stored?.saturation ?? fallback.saturation,
+    lightness: stored?.lightness ?? fallback.lightness,
+  }
+}
+
+/** One range's band, with Photoshop's starting geometry for anything the project did not move. */
+export function resolvedBand(adjustment: LayerAdjustment, range: ColorRange): HueBand {
+  return { ...DEFAULT_BANDS[range], ...(adjustment.hsvSettings?.bands?.[range] ?? {}) }
+}
+
+/** Every range's band, which is what the table builder and the panel's edge editors both read. */
+export function resolvedBands(adjustment: LayerAdjustment): Record<ColorRange, HueBand> {
+  return Object.fromEntries(COLOR_RANGES.map((range) => [range, resolvedBand(adjustment, range)])) as Record<
+    ColorRange,
+    HueBand
+  >
+}
+
+/**
+ * The four numbers that say where a band is, in the order the panel shows them.
+ *
+ * Named rather than inlined so the panel and its tests cannot drift from the interface: the band is
+ * the geometry, and getting the order wrong would silently move the wrong edge.
+ */
+export const HUE_BAND_EDGES = ['falloffStart', 'rangeStart', 'rangeEnd', 'falloffEnd'] as const
+
+/**
+ * The settings one range-wide change produces, as a value rather than a mutation.
+ *
+ * Pure so the panel's writing is unit-tested instead of only exercised through a rendered form,
+ * and so the manifest's own shape stays in the model rather than in a template.
+ */
+export function withRangeValues(
+  adjustment: LayerAdjustment,
+  range: ColorRange,
+  values: RangeAdjustment,
+): HueSaturationSettings {
+  const settings = adjustment.hsvSettings ?? resolvedHsv(adjustment)
+  return { ...settings, adjustments: { ...settings.adjustments, [range]: values } }
+}
+
+/** The settings with one range's band edge moved, leaving the other six bands where they were. */
+export function withBand(adjustment: LayerAdjustment, range: ColorRange, band: HueBand): HueSaturationSettings {
+  const settings = adjustment.hsvSettings ?? resolvedHsv(adjustment)
+  return { ...settings, bands: { ...settings.bands, [range]: band } }
+}
+
+/**
+ * Whether a band's four edges are in order.
+ *
+ * The order is by *forward distance* from `falloffStart`, not by the raw numbers: reds run
+ * 315, 345, 15, 45, which reads as out of order and is not. `bandWeight` walks the same four
+ * distances, and a band whose distances crossed would claim nothing or claim the wheel.
+ */
+export function bandIsOrdered(band: HueBand): boolean {
+  const rampIn = forward(band.falloffStart, band.rangeStart)
+  const plateauEnd = forward(band.falloffStart, band.rangeEnd)
+  const span = forward(band.falloffStart, band.falloffEnd)
+  // A span of zero is the master's shape — "everything" — so it counts as ordered.
+  return rampIn <= plateauEnd && plateauEnd <= span
+}
+
+/**
+ * One band edge moved, rounded to a degree and kept in order.
+ *
+ * An edge typed past its neighbour lands on the nearest value that does not cross it, the way a
+ * number field clamps to its range, rather than being silently dropped or leaving a band that
+ * claims nothing. The search is a degree at a time because this runs on a number field's change,
+ * not per frame, and a rule this small is worth being obviously correct about.
+ */
+export function movedBandEdge(band: HueBand, edge: keyof HueBand, degrees: number): HueBand {
+  const wanted = Math.round(clamp(degrees, 0, 360, band[edge]))
+  if (bandIsOrdered({ ...band, [edge]: wanted })) return { ...band, [edge]: wanted }
+  for (let step = 1; step <= 360; step += 1) {
+    for (const candidate of [wanted - step, wanted + step]) {
+      if (candidate < 0 || candidate > 360) continue
+      if (bandIsOrdered({ ...band, [edge]: candidate })) return { ...band, [edge]: candidate }
+    }
+  }
+  return band
 }
 
 /**
@@ -385,7 +499,7 @@ function bandsFor(adjustment: LayerAdjustment): Record<ColorRange, HueBand> {
  * folded into the value table the other kinds use.
  */
 export function buildHueResponse(adjustment: LayerAdjustment): Uint8Array {
-  const bands = bandsFor(adjustment)
+  const bands = resolvedBands(adjustment)
   const adjustments = rangeAdjustments(adjustment)
   const out = new Uint8Array(360 * 4)
   for (let hue = 0; hue < 360; hue += 1) {
@@ -394,19 +508,14 @@ export function buildHueResponse(adjustment: LayerAdjustment): Uint8Array {
     let lightness = 0
     for (const range of COLOR_RANGES) {
       const each = adjustments[range]
-      if (!each) continue
-      // A range the caller set only one slider on holds `undefined` for the other two, and
-      // `undefined * weight` is NaN — which packs to byte 0, which decodes as -100: a hue-only
-      // shift silently drove saturation and lightness to nothing and rendered the band black.
-      const hueShift = each.hue ?? 0
-      const saturationAmount = each.saturation ?? 0
-      const lightnessAmount = each.lightness ?? 0
-      if (hueShift === 0 && saturationAmount === 0 && lightnessAmount === 0) continue
+      // A range that asks for nothing is skipped rather than added as a zero: the weights overlap,
+      // so adding them would be wasted work on every degree of the wheel.
+      if (each.hue === 0 && each.saturation === 0 && each.lightness === 0) continue
       const weight = bandWeight(bands[range], hue)
       if (weight === 0) continue
-      shift += hueShift * weight
-      saturation += saturationAmount * weight
-      lightness += lightnessAmount * weight
+      shift += each.hue * weight
+      saturation += each.saturation * weight
+      lightness += each.lightness * weight
     }
     // Packed into bytes the shader can unpack, centred on 128 so that *nothing* is exactly nothing:
     // the old `(value + 180) / 360` mapping put neutral at 127.5, which no byte can hold, so an
@@ -606,10 +715,13 @@ export function packAdjustment(
 
   out.set([adjustmentKindIndex(adjustment.kind), opacity, canvasWidth, canvasHeight], 0)
 
-  // Hue/Saturation: the per-range bands are not implemented, so the master values are what apply.
-  const hsvHue = hsvSettings ? hsvSettings.hue : adjustment.hue ?? 0
-  const hsvSaturation = hsvSettings ? hsvSettings.saturation : adjustment.saturation ?? 0
-  const hsvLightness = hsvSettings ? hsvSettings.lightness : adjustment.lightness ?? 0
+  // Hue/Saturation: the uniform's colorize slot carries the master, and the per-range table is
+  // built from the same master plus the bands. Both read it through one helper so the panel's
+  // master slider and the colorize path cannot disagree about where the master lives.
+  const master = masterValues(adjustment)
+  const hsvHue = master.hue
+  const hsvSaturation = master.saturation
+  const hsvLightness = master.lightness
   const hsvColorize = (hsvSettings ? hsvSettings.colorize : adjustment.colorize) ?? false
 
   const exposure = resolvedExposure(adjustment)

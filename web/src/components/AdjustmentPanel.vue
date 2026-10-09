@@ -10,7 +10,13 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import {
+  COLOR_RANGES,
   curveValue,
+  DEFAULT_BANDS,
+  HUE_BAND_EDGES,
+  movedBandEdge,
+  rangeValues,
+  resolvedBand,
   resolvedBlackWhite,
   resolvedColorBalance,
   resolvedCurves,
@@ -19,8 +25,14 @@ import {
   resolvedGrain,
   resolvedHsv,
   resolvedLevels,
+  withBand,
+  withRangeValues,
+  type ColorRange,
   type CurvePoint,
+  type HueBand,
+  type HueSaturationSettings,
   type LevelRange,
+  type ResolvedRange,
   type Rgb,
 } from '../model/adjustments'
 import {
@@ -109,6 +121,84 @@ function hexToRgb(hex: string): Rgb {
     green: Number.parseInt(hex.slice(3, 5), 16) / 255,
     blue: Number.parseInt(hex.slice(5, 7), 16) / 255,
   }
+}
+
+// MARK: - Hue/Saturation's colour ranges
+
+/**
+ * Which range the three sliders are pointed at.
+ *
+ * The choice lives with the adjustment rather than in component state, so switching layers and
+ * coming back shows the range you were working on and a reopened project does too. It is not part
+ * of the rendering — `buildHueResponse` reads `adjustments`, never `range`.
+ */
+const hsvRange = computed<ColorRange>(() => {
+  const chosen = adjustment.value?.hsvSettings?.range
+  return COLOR_RANGES.includes(chosen as ColorRange) ? (chosen as ColorRange) : 'master'
+})
+
+function selectHsvRange(event: Event): void {
+  const chosen = (event.target as HTMLSelectElement).value as ColorRange
+  if (!COLOR_RANGES.includes(chosen)) return
+  gesture('Range', () => setHsvSettings({ range: chosen }))
+}
+
+function hsvValues(): ResolvedRange {
+  const current = adjustment.value
+  if (!current) return { hue: 0, saturation: 0, lightness: 0 }
+  return rangeValues(current, hsvRange.value)
+}
+
+function hsvBand(): HueBand {
+  const current = adjustment.value
+  if (!current) return DEFAULT_BANDS.master
+  return resolvedBand(current, hsvRange.value)
+}
+
+/** Bumped whenever an edge is edited, so the four number fields re-read the stored band. */
+const edgeEcho = ref(0)
+
+/**
+ * Writes the whole settings block rather than poking at it.
+ *
+ * `patchAdjustmentSettings` merges at the block level, and the range writers are already pure
+ * functions in the model that keep every other range where it was, so a whole-object write is both
+ * the simplest thing here and the thing the model's tests cover.
+ */
+function setHsvSettings(settings: Partial<HueSaturationSettings>): void {
+  patchAdjustmentSettings('hsvSettings', { ...settings })
+}
+
+/**
+ * The master writes `adjustments.master`, exactly like the six bands.
+ *
+ * One code path for all seven ranges, and the flat `hue`/`saturation`/`lightness` fields stay as the
+ * shape an older project stored its master in — `masterValues` reads either.
+ */
+function setHsvValue(key: keyof ResolvedRange, value: number): void {
+  const current = adjustment.value
+  if (!current) return
+  const range = hsvRange.value
+  setHsvSettings(withRangeValues(current, range, { ...rangeValues(current, range), [key]: value }))
+}
+
+function setHsvEdge(key: keyof HueBand, value: number): void {
+  const current = adjustment.value
+  if (!current) return
+  const range = hsvRange.value
+  const band = movedBandEdge(resolvedBand(current, range), key, value)
+  gesture('Colour range', () => setHsvSettings(withBand(current, range, band)))
+  // A clamped or impossible edit still has to show what was stored, and Vue will not patch a `value`
+  // binding that did not change — typing 100 into a field that clamps back to 100 again, say.
+  edgeEcho.value += 1
+}
+
+/** Back to nothing for the selected range, which is also how the table is emptied. */
+function resetHsvRange(): void {
+  const current = adjustment.value
+  if (!current) return
+  const range = hsvRange.value
+  gesture('Reset range', () => setHsvSettings(withRangeValues(current, range, { hue: 0, saturation: 0, lightness: 0 })))
 }
 
 // MARK: - Levels
@@ -208,19 +298,27 @@ function onCurveMove(event: PointerEvent, element: SVGSVGElement): void {
   <div v-if="adjustment" class="adjust">
     <!-- Hue/Saturation -->
     <template v-if="adjustment.kind === 'Hue/Saturation'">
+      <label class="row">
+        <span>{{ t('adjust.range') }}</span>
+        <select class="input" :value="hsvRange" @change="selectHsvRange($event)">
+          <option v-for="range in COLOR_RANGES" :key="range" :value="range">
+            {{ t(`adjust.ranges.${range}`) }}
+          </option>
+        </select>
+      </label>
       <label class="slider">
         <span>{{ t('adjust.hue') }}</span>
         <input
           type="range"
           min="-180"
           max="180"
-          :value="resolvedHsv(adjustment).hue"
+          :value="hsvValues().hue"
           @pointerdown="beginEdit('Hue')"
-          @input="setScalar('hue', numberFromEvent($event))"
+          @input="setHsvValue('hue', numberFromEvent($event))"
           @change="endEdit()"
           @pointerup="endEdit()"
         />
-        <output>{{ Math.round(resolvedHsv(adjustment).hue) }}</output>
+        <output>{{ Math.round(hsvValues().hue) }}</output>
       </label>
       <label class="slider">
         <span>{{ t('adjust.saturation') }}</span>
@@ -228,13 +326,13 @@ function onCurveMove(event: PointerEvent, element: SVGSVGElement): void {
           type="range"
           min="-100"
           max="100"
-          :value="resolvedHsv(adjustment).saturation"
+          :value="hsvValues().saturation"
           @pointerdown="beginEdit('Saturation')"
-          @input="setScalar('saturation', numberFromEvent($event))"
+          @input="setHsvValue('saturation', numberFromEvent($event))"
           @change="endEdit()"
           @pointerup="endEdit()"
         />
-        <output>{{ Math.round(resolvedHsv(adjustment).saturation) }}</output>
+        <output>{{ Math.round(hsvValues().saturation) }}</output>
       </label>
       <label class="slider">
         <span>{{ t('adjust.lightness') }}</span>
@@ -242,22 +340,46 @@ function onCurveMove(event: PointerEvent, element: SVGSVGElement): void {
           type="range"
           min="-100"
           max="100"
-          :value="resolvedHsv(adjustment).lightness"
+          :value="hsvValues().lightness"
           @pointerdown="beginEdit('Lightness')"
-          @input="setScalar('lightness', numberFromEvent($event))"
+          @input="setHsvValue('lightness', numberFromEvent($event))"
           @change="endEdit()"
           @pointerup="endEdit()"
         />
-        <output>{{ Math.round(resolvedHsv(adjustment).lightness) }}</output>
+        <output>{{ Math.round(hsvValues().lightness) }}</output>
       </label>
+
+      <!--
+        The band, only for a range that has one. Four numbers rather than four more sliders: the
+        edges are geometry, and the panel is already six sliders deep in this kind alone.
+      -->
+      <template v-if="hsvRange !== 'master'">
+        <p class="note">{{ t('adjust.bandsNote') }}</p>
+        <div class="grid" :key="edgeEcho">
+          <label v-for="edge in HUE_BAND_EDGES" :key="edge" class="row row--tiny">
+            <span>{{ t(`adjust.edges.${edge}`) }}</span>
+            <input
+              class="input"
+              type="number"
+              min="0"
+              max="360"
+              step="1"
+              :value="Math.round(hsvBand()[edge])"
+              @change="setHsvEdge(edge, numberFromEvent($event))"
+            />
+          </label>
+        </div>
+      </template>
+
       <label class="check">
         <input
           type="checkbox"
           :checked="resolvedHsv(adjustment).colorize"
-          @change="gesture('Colorize', () => setScalar('colorize', checkedFromEvent($event)))"
+          @change="gesture('Colorize', () => patchAdjustment({ colorize: checkedFromEvent($event) }))"
         />
         {{ t('adjust.colorize') }}
       </label>
+      <button type="button" class="reset" @click="resetHsvRange()">{{ t('adjust.resetRange') }}</button>
     </template>
 
     <!-- Levels -->
@@ -529,7 +651,7 @@ function onCurveMove(event: PointerEvent, element: SVGSVGElement): void {
     <!-- Black & White -->
     <template v-else-if="adjustment.kind === 'Black & White'">
       <label v-for="key in BW_RANGES" :key="key" class="slider">
-        <span>{{ t(`adjust.bw.${key}`) }}</span>
+        <span>{{ t(`adjust.ranges.${key}`) }}</span>
         <input
           type="range"
           min="-200"
@@ -809,5 +931,21 @@ function onCurveMove(event: PointerEvent, element: SVGSVGElement): void {
   color: var(--ps-text-faint);
   font-size: 10px;
   line-height: 1.5;
+}
+
+/* A plain secondary button, since the panel has no button style of its own. */
+.reset {
+  align-self: flex-start;
+  padding: 2px 8px;
+  border: 1px solid var(--ps-line);
+  border-radius: var(--ps-radius);
+  background: var(--ps-well);
+  color: var(--ps-text-dim);
+  cursor: pointer;
+}
+
+.reset:hover {
+  border-color: var(--ps-line-hard);
+  color: var(--ps-text);
 }
 </style>

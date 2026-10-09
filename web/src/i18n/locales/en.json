@@ -372,7 +372,9 @@
     "roughness": "Roughness",
     "gaussian": "Gaussian",
     "monochromatic": "Monochromatic",
-    "bw": {
+    "range": "Range",
+    "ranges": {
+      "master": "Master",
       "reds": "Reds",
       "yellows": "Yellows",
       "greens": "Greens",
@@ -380,6 +382,14 @@
       "blues": "Blues",
       "magentas": "Magentas"
     },
+    "edges": {
+      "falloffStart": "Falloff in",
+      "rangeStart": "Start",
+      "rangeEnd": "End",
+      "falloffEnd": "Falloff out"
+    },
+    "bandsNote": "The band decides which hues these three sliders apply to.",
+    "resetRange": "Reset range",
     "tint": "Tint",
     "tintHue": "Tint hue",
     "preserveLuminosity": "Preserve luminosity",

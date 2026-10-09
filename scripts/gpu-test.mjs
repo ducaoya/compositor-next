@@ -246,6 +246,66 @@ const CASES = [
     })()`,
   },
   {
+    name: 'moving a band moves a different family',
+    // The band geometry is the panel's other half: Photoshop's blues start where the reference says
+    // they start, but a project can move them, and the table has to follow. The blues band is moved
+    // onto the fixtures magentas and the two families swap roles.
+    probe: `(async () => { ${PRELUDE}
+      const before = await freshDocument()
+      const blues = findByHue(before, (h) => h >= 226 && h <= 254, 8, 0.12)
+      const magentas = findByHue(before, (h) => h >= 292 && h <= 308, 8, 0.12)
+      if (blues.length < 4 || magentas.length < 4) {
+        return { pass: false, detail: { error: 'the fixture has neither blues nor magentas to measure', blues, magentas } }
+      }
+      const added = await addAtTop('Hue/Saturation')
+      if (!added || !added.adjustment) return { pass: false, detail: { error: 'the adjustment was not added' } }
+
+      // The blues band, exactly where Photoshop puts it: the blues move and the magentas do not.
+      added.adjustment.hsvSettings = { hue: 0, saturation: 0, lightness: 0, colorize: false, adjustments: { blues: { hue: 60 } } }
+      await wait(600)
+      const shipped = await s.renderAndRead()
+      const shippedBlues = blues.filter((p) => !same(before, shipped, p)).length
+      const shippedMagentas = magentas.filter((p) => same(before, shipped, p)).length
+
+      // Moved onto the magentas, with the band numbers the panel's edge editors write.
+      added.adjustment.hsvSettings = {
+        hue: 0,
+        saturation: 0,
+        lightness: 0,
+        colorize: false,
+        adjustments: { blues: { hue: 60 } },
+        bands: { blues: { falloffStart: 285, rangeStart: 295, rangeEnd: 305, falloffEnd: 315 } },
+      }
+      await wait(600)
+      const moved = await s.renderAndRead()
+      const movedMagentas = magentas.filter((p) => !same(before, moved, p)).length
+      const movedBlues = blues.filter((p) => same(before, moved, p)).length
+      // 292 is a fifth of the way up the falloff and 300 is the middle of the plateau, so the
+      // rotation runs from about 42 degrees to 60 rather than being one number.
+      const rotations = magentas.slice(0, 3).map((p) =>
+        Math.round((hueOf(moved, p[0], p[1]) - hueOf(before, p[0], p[1]) + 360) % 360),
+      )
+
+      return {
+        pass: shippedBlues === blues.length
+          && shippedMagentas === magentas.length
+          && movedMagentas === magentas.length
+          && movedBlues === blues.length
+          && rotations.every((turned) => turned >= 38 && turned <= 66),
+        detail: {
+          ofBlues: blues.length,
+          ofMagentas: magentas.length,
+          bluesMovedWithTheShippedBand: shippedBlues,
+          magentasUntouchedByTheShippedBand: shippedMagentas,
+          magentasMovedWithTheBandOnThem: movedMagentas,
+          bluesUntouchedOnceItMoved: movedBlues,
+          rotations,
+        },
+      }
+    })()`,
+  },
+
+  {
     name: 'gaussian blur smooths',
     probe: `(async () => { ${PRELUDE}
       const r = await setup('Gaussian Blur', (a) => { a.blurRadius = 24 })

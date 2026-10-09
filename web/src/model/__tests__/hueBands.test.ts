@@ -3,11 +3,19 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_BANDS,
   bandWeight,
+  bandIsOrdered,
   buildHueResponse,
   buildLut,
   COLOR_RANGES,
   forward,
   identityAdjustment,
+  masterValues,
+  movedBandEdge,
+  packAdjustment,
+  rangeValues,
+  resolvedBand,
+  withBand,
+  withRangeValues,
   type LayerAdjustment,
 } from '../adjustments'
 
@@ -193,5 +201,124 @@ describe('which adjustments carry a table', () => {
     for (const kind of ['Gradient Map', 'Color Balance', 'Black & White', 'Grain', 'Gaussian Blur'] as const) {
       expect(buildLut(identityAdjustment(kind))).toBeNull()
     }
+  })
+})
+
+describe('the per-range values the panel writes', () => {
+  it('defaults everything a range did not set, rather than leaving it undefined', () => {
+    // The shape a slider produces: one field set, two absent. `undefined` reaching the table is what
+    // made the band render black, so this is the assertion that stands between the two.
+    const adjustment = withBands({ magentas: { hue: 60 } })
+    const values = rangeValues(adjustment, 'magentas')
+    expect(values).toEqual({ hue: 60, saturation: 0, lightness: 0 })
+  })
+
+  it('reads an older file\'s master from the flat fields, and a newer one from `adjustments`', () => {
+    const legacy = identityAdjustment('Hue/Saturation')
+    legacy.hsvSettings = { hue: 30, saturation: 20, lightness: -10, colorize: false }
+    expect(masterValues(legacy)).toEqual({ hue: 30, saturation: 20, lightness: -10 })
+
+    const modern = identityAdjustment('Hue/Saturation')
+    modern.hsvSettings = {
+      hue: 0,
+      saturation: 0,
+      lightness: 0,
+      colorize: false,
+      adjustments: { master: { hue: -40, saturation: 5, lightness: 0 } },
+    }
+    expect(masterValues(modern)).toEqual({ hue: -40, saturation: 5, lightness: 0 })
+  })
+
+  it('keeps the master applying alongside a range, the way Photoshop does', () => {
+    // Both are in the table: the master claims every hue and the band claims its own, so a pixel in
+    // the band sees the sum. Replacing the master with the bands instead was how a master setting
+    // came to be silently ignored.
+    const adjustment = identityAdjustment('Hue/Saturation')
+    adjustment.saturation = 50
+    adjustment.hsvSettings = {
+      hue: 0,
+      saturation: 50,
+      lightness: 0,
+      colorize: false,
+      adjustments: { greens: { hue: 30 } },
+    }
+    const table = buildHueResponse(adjustment)
+    // A green is in the band: hue moves and the master's saturation is there too.
+    expect(Math.abs(responseAt(table, 120).shift - 30)).toBeLessThan(1.5)
+    expect(Math.abs(responseAt(table, 120).saturation - 50)).toBeLessThan(1.0)
+    // A magenta is outside it: the master's saturation still applies, the band's hue does not.
+    expect(responseAt(table, 300).shift).toBe(0)
+    expect(Math.abs(responseAt(table, 300).saturation - 50)).toBeLessThan(1.0)
+  })
+
+  it('changes one range and leaves the other six exactly where they were', () => {
+    const before = identityAdjustment('Hue/Saturation')
+    before.hsvSettings = withRangeValues(before, 'blues', { hue: 60 })
+    const after = withRangeValues(before, 'reds', { saturation: -30, hue: 0, lightness: 0 })
+    expect(after.adjustments?.blues).toEqual({ hue: 60 })
+    expect(after.adjustments?.reds).toEqual({ hue: 0, saturation: -30, lightness: 0 })
+    expect(after.adjustments?.greens).toBeUndefined()
+    // And the master's own fields are untouched by a band write.
+    expect(after.hue).toBe(0)
+    expect(after.colorize).toBe(false)
+  })
+
+  it('changes one band and leaves the other six alone', () => {
+    const adjustment = identityAdjustment('Hue/Saturation')
+    const moved = withBand(adjustment, 'greens', { falloffStart: 90, rangeStart: 100, rangeEnd: 140, falloffEnd: 180 })
+    expect(resolvedBand({ ...adjustment, hsvSettings: moved }, 'greens')).toEqual({
+      falloffStart: 90,
+      rangeStart: 100,
+      rangeEnd: 140,
+      falloffEnd: 180,
+    })
+    // Everything the project did not move is still Photoshop's starting band.
+    expect(resolvedBand({ ...adjustment, hsvSettings: moved }, 'blues')).toEqual(DEFAULT_BANDS.blues)
+    expect(moved.bands?.blues).toBeUndefined()
+  })
+
+  it('reads a band as a forward walk, because reds straddle zero', () => {
+    // 315, 345, 15, 45 is in order and does not look it: the four are ordered by how far each is
+    // from the falloff start going forwards, which is the walk `bandWeight` makes.
+    expect(bandIsOrdered(DEFAULT_BANDS.reds)).toBe(true)
+    expect(bandIsOrdered(DEFAULT_BANDS.master)).toBe(true)
+    for (const range of COLOR_RANGES) expect(bandIsOrdered(DEFAULT_BANDS[range])).toBe(true)
+    // Crossing a neighbour is not.
+    expect(bandIsOrdered({ ...DEFAULT_BANDS.greens, rangeEnd: 95 })).toBe(false)
+    // 340 sits behind the reds' range start of 345, which is crossing even though it is a bigger number.
+    expect(bandIsOrdered({ ...DEFAULT_BANDS.reds, rangeEnd: 340 })).toBe(false)
+  })
+
+  it('keeps a moved edge in order instead of leaving a band that claims nothing', () => {
+    // The blues run 195…285. Pulling the falloff start past the range end lands on the nearest
+    // value that does not cross it.
+    const pulled = movedBandEdge(DEFAULT_BANDS.blues, 'falloffStart', 340)
+    expect(bandIsOrdered(pulled)).toBe(true)
+    expect(pulled.rangeStart).toBe(DEFAULT_BANDS.blues.rangeStart)
+    expect(pulled.rangeEnd).toBe(DEFAULT_BANDS.blues.rangeEnd)
+    expect(pulled.falloffEnd).toBe(DEFAULT_BANDS.blues.falloffEnd)
+
+    // And the same from the other side: a range end typed before its start.
+    const squeezed = movedBandEdge(DEFAULT_BANDS.greens, 'rangeEnd', 20)
+    expect(bandIsOrdered(squeezed)).toBe(true)
+    expect(squeezed.falloffStart).toBe(DEFAULT_BANDS.greens.falloffStart)
+
+    // An ordinary move is taken exactly, rounded to a degree.
+    expect(movedBandEdge(DEFAULT_BANDS.blues, 'rangeStart', 230.4).rangeStart).toBe(230)
+  })
+
+  it('gives the shader the master wherever the panel put it', () => {
+    // The colorize path reads the master from the uniform, so a panel that writes
+    // `adjustments.master` has to reach it — otherwise Colorize would apply nothing.
+    const adjustment = identityAdjustment('Hue/Saturation')
+    adjustment.hsvSettings = {
+      hue: 0,
+      saturation: 0,
+      lightness: 0,
+      colorize: true,
+      adjustments: { master: { hue: 45, saturation: 20, lightness: -5 } },
+    }
+    const packed = packAdjustment(adjustment, 1, 10, 10)
+    expect([packed[8], packed[9], packed[10]]).toEqual([45, 20, -5])
   })
 })

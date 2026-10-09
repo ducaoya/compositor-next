@@ -372,7 +372,9 @@
     "roughness": "粗糙度",
     "gaussian": "高斯分布",
     "monochromatic": "单色",
-    "bw": {
+    "range": "范围",
+    "ranges": {
+      "master": "全图",
       "reds": "红色",
       "yellows": "黄色",
       "greens": "绿色",
@@ -380,6 +382,14 @@
       "blues": "蓝色",
       "magentas": "洋红"
     },
+    "edges": {
+      "falloffStart": "衰减起点",
+      "rangeStart": "范围起点",
+      "rangeEnd": "范围终点",
+      "falloffEnd": "衰减终点"
+    },
+    "bandsNote": "色带决定这三个滑块作用于哪些色相。",
+    "resetRange": "重置范围",
     "tint": "色调",
     "tintHue": "色调色相",
     "preserveLuminosity": "保持明度",
