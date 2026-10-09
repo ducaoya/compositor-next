@@ -10,7 +10,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import { TOOLS_BY_ID } from '../model/tools'
-import { fit, importImages, useSession, zoomTo } from '../state/session'
+import { fit, importImages, isRetouchTool, useSession, zoomTo } from '../state/session'
 
 const { t } = useI18n()
 const {
@@ -24,6 +24,7 @@ const {
   gradient,
   shape,
   lassoPolygonal,
+  retouch,
 } = useSession()
 
 const label = computed(() => {
@@ -43,6 +44,17 @@ const tipStyle = computed(() => {
 })
 
 const isBrush = computed(() => tool.value === 'brush' || tool.value === 'eraser')
+/** Spot Healing, Clone Stamp, and the smooth and tone groups: they share the tip and little else. */
+const isRetouch = computed(() => isRetouchTool())
+const isSmooth = computed(() => tool.value === 'blur' || tool.value === 'sharpen' || tool.value === 'smudge')
+const isTone = computed(() => tool.value === 'dodge' || tool.value === 'burn' || tool.value === 'sponge')
+/** The tones a dodge or burn brush reaches, which is Photoshop's Range menu. */
+const TONE_RANGES = ['shadows', 'midtones', 'highlights'] as const
+const HEAL_MODES = [
+  { id: 0 as const, key: 'options.healContentAware' },
+  { id: 1 as const, key: 'options.healCreateTexture' },
+  { id: 2 as const, key: 'options.healProximity' },
+]
 const isMarquee = computed(
   () => tool.value === 'marqueeRect' || tool.value === 'marqueeEllipse' || tool.value === 'lasso',
 )
@@ -118,6 +130,81 @@ const MODES = [
       <label class="options__number">
         {{ t('options.flow') }} <input v-model.number="brush.flow" type="number" min="0" max="1" step="0.01" />
       </label>
+    </template>
+
+    <!--
+      Spot Healing, Clone Stamp, and the smooth and tone groups. They share the tip with the brush,
+      because Photoshop's retouch tools do, and then each family gets what is particular to it.
+      Photoshop shows Strength instead of Opacity and Flow for these, and so does this.
+    -->
+    <template v-else-if="isRetouch">
+      <div class="options__tip" :title="t('options.brushTip', { size: Math.round(brush.size) })">
+        <span class="options__tip-dot" :style="tipStyle" />
+      </div>
+      <label class="options__number">
+        {{ t('options.size') }} <input v-model.number="brush.size" type="number" min="1" max="500" step="1" />
+        {{ t('common.px') }}
+      </label>
+      <label class="options__number">
+        {{ t('options.hardness') }} <input v-model.number="brush.hardness" type="number" min="0" max="1" step="0.01" />
+      </label>
+
+      <!-- Clone Stamp -->
+      <template v-if="tool === 'clone'">
+        <span class="options__hint">{{ t('options.cloneSourceHint') }}</span>
+        <label class="options__check">
+          <input v-model="retouch.cloneAligned" type="checkbox" /> {{ t('options.aligned') }}
+        </label>
+      </template>
+
+      <!-- Blur, Sharpen and Smudge -->
+      <template v-else-if="isSmooth">
+        <label class="options__number">
+          {{ t('options.strength') }}
+          <input v-model.number="brush.opacity" type="number" min="0" max="1" step="0.01" />
+        </label>
+        <label class="options__number">
+          {{ t('options.blurRadius') }}
+          <input v-model.number="retouch.blurRadius" type="number" min="1" max="100" step="1" /> {{ t('common.px') }}
+        </label>
+      </template>
+
+      <!-- Dodge, Burn and Sponge -->
+      <template v-else-if="isTone">
+        <label v-if="tool === 'sponge'" class="options__select">
+          {{ t('options.mode') }}
+          <select v-model="retouch.saturating">
+            <option :value="true">{{ t('options.saturate') }}</option>
+            <option :value="false">{{ t('options.desaturate') }}</option>
+          </select>
+        </label>
+        <label v-else class="options__select">
+          {{ t('options.range') }}
+          <select v-model="retouch.toneRange">
+            <option v-for="range in TONE_RANGES" :key="range" :value="range">
+              {{ t(`options.toneRange.${range}`) }}
+            </option>
+          </select>
+        </label>
+        <label class="options__number">
+          {{ t('options.exposure') }}
+          <input v-model.number="retouch.exposure" type="number" min="1" max="100" step="1" /> %
+        </label>
+      </template>
+
+      <!-- Spot Healing -->
+      <template v-else>
+        <label class="options__select">
+          {{ t('options.mode') }}
+          <select v-model.number="retouch.healMode">
+            <option v-for="mode in HEAL_MODES" :key="mode.id" :value="mode.id">{{ t(mode.key) }}</option>
+          </select>
+        </label>
+        <label class="options__number">
+          {{ t('options.strength') }}
+          <input v-model.number="brush.opacity" type="number" min="0" max="1" step="0.01" />
+        </label>
+      </template>
     </template>
 
     <!-- Magic Wand -->
@@ -215,6 +302,11 @@ const MODES = [
   gap: 4px;
   align-items: center;
   color: var(--ps-text-dim);
+}
+
+/* An instruction rather than a control: there is no Alt-click for anything to hold. */
+.options__hint {
+  color: var(--ps-text-faint);
 }
 
 .options__number {

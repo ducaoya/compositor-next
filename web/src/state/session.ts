@@ -89,6 +89,14 @@ import {
   type LayerSurface,
 } from '../render/paint'
 import {
+  RetouchStroke,
+  fillContentAware,
+  type RetouchKind,
+  type RetouchOptions,
+} from '../render/retouchStroke'
+import { RETOUCH_TOOLS } from '../model/tools'
+import type { ToneRange } from '../render/retouch'
+import {
   assetKey,
   backend,
   type AssetBytes,
@@ -584,6 +592,15 @@ export function useSession() {
     loadMaskSelection,
     drawGradient,
     drawShape,
+    retouch,
+    isRetouchTool,
+    retouchKindFor,
+    beginRetouch,
+    moveRetouch,
+    endRetouch,
+    cloneSourcePoint,
+    setCloneSource,
+    contentAwareFill,
     lassoPolygonal,
     lassoPoints,
     showsRulers,
@@ -1479,6 +1496,258 @@ export function endStroke(): void {
   strokeSmoothed = null
   if (history.isEditing) endEdit()
   schedulePaintFlush()
+}
+
+// MARK: - Retouching
+
+/**
+ * The retouch tools' own options, kept the way Photoshop keeps them: per tool, not one set shared.
+ *
+ * The tip itself is the rail's brush settings, because Photoshop's retouch tools share Size and
+ * Hardness with the brush; what goes here is what is particular to each family.
+ */
+export const retouch = reactive({
+  /** Clone Stamp: the source moves with the brush, so a second stroke lines up with the first. */
+  cloneAligned: true,
+  /** Blur and Sharpen: how wide the softening is, measured on the canvas. */
+  blurRadius: 12,
+  /** Dodge, Burn and Sponge: which part of the tone range the brush reaches. */
+  toneRange: 'midtones' as ToneRange,
+  /** Dodge, Burn and Sponge: how much one pass changes a pixel, in percent. */
+  exposure: 30,
+  /** Sponge: towards full saturation, or towards none. */
+  saturating: true,
+  /** Spot Healing: 0 content-aware, 1 create texture, 2 proximity match. */
+  healMode: 0 as 0 | 1 | 2,
+})
+
+/** Where Clone Stamp copies from, in document pixels. Alt-clicking sets it. */
+const cloneSource = ref<[number, number] | null>(null)
+export const cloneSourcePoint = computed(() => cloneSource.value)
+/** The alignment the last stroke fixed, so an aligned second stroke keeps the same offset. */
+let cloneAlignment: { layer: string; offset: [number, number] } | null = null
+
+/** Alt-click: where Clone Stamp copies from. A new source starts a new alignment. */
+export function setCloneSource(x: number, y: number): void {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return
+  cloneSource.value = [x, y]
+  cloneAlignment = null
+}
+
+/** Which retouch stroke the active tool and the modifiers mean, or null for any other tool. */
+export function retouchKindFor(altHeld: boolean): RetouchKind | null {
+  switch (tool.value) {
+    case 'clone':
+      return 'clone'
+    case 'heal':
+      return 'heal'
+    case 'smudge':
+      return 'smudge'
+    case 'sponge':
+      return 'sponge'
+    // Alt is the same swap Photoshop makes: it turns Blur into Sharpen and Dodge into Burn, so the
+    // options bar does not need a control for the one you use less.
+    case 'blur':
+      return altHeld ? 'sharpen' : 'blur'
+    case 'sharpen':
+      return altHeld ? 'blur' : 'sharpen'
+    case 'dodge':
+      return altHeld ? 'burn' : 'dodge'
+    case 'burn':
+      return altHeld ? 'dodge' : 'burn'
+    default:
+      return null
+  }
+}
+
+/** Whether the active tool reworks the layer's pixels rather than painting a colour. */
+export function isRetouchTool(): boolean {
+  return RETOUCH_TOOLS.has(tool.value)
+}
+
+let retouchStroke: RetouchStroke | null = null
+let retouchLayer: string | null = null
+let retouchSurface: LayerSurface | null = null
+
+/**
+ * The whole-pixel offset between where a Clone stroke paints and where it copies from.
+ *
+ * An aligned stroke keeps the first stroke's offset; a fresh source, or Aligned switched off, runs
+ * from the brush to the source, which is what makes the same Alt-click stamp the same thing
+ * wherever it is pressed.
+ */
+export function cloneOffsetFor(layer: LayerRecord, x: number, y: number): [number, number] | null {
+  const source = cloneSource.value
+  if (!source) return null
+  if (retouch.cloneAligned && cloneAlignment && cloneAlignment.layer === layer.id) {
+    return cloneAlignment.offset
+  }
+  const [sx, sy] = documentToLayer(layer, source[0], source[1])
+  const [px, py] = documentToLayer(layer, x, y)
+  return [Math.round(sx - px), Math.round(sy - py)]
+}
+
+/**
+ * Starts a retouch stroke, or reports that it cannot start.
+ *
+ * The sample a stroke works from is taken here, in the stroke itself, so every dab of one stroke
+ * sees the same pixels — which is the difference between a clone that copies the layer and a clone
+ * that copies what it has already painted.
+ */
+export function beginRetouch(x: number, y: number, altHeld: boolean): boolean {
+  const layer = paintableLayer()
+  const kind = retouchKindFor(altHeld)
+  if (!layer || !kind) return false
+  // These rework colour, and a mask has none: there is nothing for a heal to match or a dodge to
+  // brighten. Photoshop refuses them on a mask for the same reason.
+  if (maskEditing.value && layer.maskFile) return false
+  const surface = ensureSurface(layer, 'image')
+  const scale = layerPixelScale(layer)
+  const [px, py] = documentToLayer(layer, x, y)
+  const radius = Math.max(0.5, brush.size / 2 / scale)
+
+  let offset: [number, number] = [0, 0]
+  if (kind === 'clone') {
+    const resolved = cloneOffsetFor(layer, x, y)
+    if (!resolved) {
+      report(t('message.cloneSource'))
+      return false
+    }
+    offset = resolved
+    cloneAlignment = { layer: layer.id, offset }
+  }
+
+  const options: RetouchOptions = {
+    kind,
+    radius,
+    hardness: brush.hardness,
+    strength: brush.opacity,
+    offset,
+    // The radius is set on the canvas and the pixels are the layer's, so a layer at half scale
+    // needs a sigma twice as wide as the canvas radius suggests.
+    sigma: Math.max(0.01, retouch.blurRadius / scale),
+    amount: 1,
+    toneRange: retouch.toneRange,
+    exposure: retouch.exposure / 100,
+    saturating: retouch.saturating,
+    healMode: retouch.healMode,
+    seed: (Date.now() ^ Math.floor(Math.random() * 0xffffffff)) >>> 0,
+  }
+
+  try {
+    retouchStroke = new RetouchStroke(surface, options)
+  } catch {
+    retouchStroke = null
+    report(t('message.paintRefused'))
+    return false
+  }
+  retouchLayer = layer.id
+  retouchSurface = surface
+
+  history.begin(retouchName(kind), manifest.value!)
+  if (!layer.imageFile) layer.imageFile = doc.imageFileName(layer.id)
+  layerImages.set(layer.id, { width: surface.width, height: surface.height })
+  modifiedSurfaces.add(assetKey(layer.id, 'image'))
+
+  retouchStroke.to([px, py])
+  surface.dirty = unionDirty(surface.dirty, retouchStroke.dirty)
+  return true
+}
+
+export function moveRetouch(x: number, y: number): void {
+  const stroke = retouchStroke
+  const layer = retouchLayer ? manifest.value?.layers.find((record) => record.id === retouchLayer) : undefined
+  if (!stroke || !layer || !retouchSurface) return
+  const [px, py] = documentToLayer(layer, x, y)
+  stroke.to([px, py])
+  retouchSurface.dirty = unionDirty(retouchSurface.dirty, stroke.dirty)
+}
+
+export function endRetouch(): void {
+  const surface = retouchSurface
+  const stroke = retouchStroke
+  retouchStroke = null
+  retouchLayer = null
+  retouchSurface = null
+  if (!surface || !stroke) return
+  // Spot Healing does its work here, over everything the stroke covered.
+  surface.dirty = unionDirty(surface.dirty, stroke.finish())
+  if (history.isEditing) endEdit()
+  schedulePaintFlush()
+}
+
+/** The undo step's name, which is the tool's own name in the language packs. */
+function retouchName(kind: RetouchKind): string {
+  const key: Record<RetouchKind, string> = {
+    clone: 'tools.clone',
+    blur: 'tools.blur',
+    sharpen: 'tools.sharpen',
+    smudge: 'tools.smudge',
+    dodge: 'tools.dodge',
+    burn: 'tools.burn',
+    sponge: 'tools.sponge',
+    heal: 'tools.heal',
+  }
+  return t(key[kind])
+}
+
+/**
+ * Content-Aware Fill, as a menu item rather than a stroke.
+ *
+ * The selection is the coverage and the layer is the image to fill from, so there is nothing to
+ * sample at the start of a drag: the whole thing runs once, and is one undo step.
+ */
+export function contentAwareFill(): void {
+  const layer = paintableLayer()
+  const current = selection.value
+  if (!layer || !current) return
+  const surface = ensureSurface(layer, 'image')
+  const coverage = selectionCoverage(layer, surface.width, surface.height)
+  if (!coverage) return
+  history.begin(t('menu.contentAwareFill'), manifest.value!)
+  if (!layer.imageFile) layer.imageFile = doc.imageFileName(layer.id)
+  layerImages.set(layer.id, { width: surface.width, height: surface.height })
+  modifiedSurfaces.add(assetKey(layer.id, 'image'))
+  const filled = fillContentAware(surface, coverage)
+  if (!filled) {
+    report(t('message.contentAwareNoSource'))
+    if (history.isEditing) endEdit()
+    return
+  }
+  surface.dirty = unionDirty(surface.dirty, { x: 0, y: 0, width: surface.width, height: surface.height })
+  if (history.isEditing) endEdit()
+  schedulePaintFlush()
+}
+
+/**
+ * The selection as coverage on a layer's own pixel grid, which is what the fill needs.
+ *
+ * A selection is a shape or a coverage mask in document pixels; either way the answer is a byte a
+ * pixel of the layer, so it is rasterized through the same mapping the brush uses to clip a dab.
+ */
+function selectionCoverage(layer: LayerRecord, width: number, height: number): Uint8ClampedArray | null {
+  const clip = currentSelectionClip(layer)
+  if (!clip) return null
+  const canvas = new OffscreenCanvas(width, height)
+  const context = canvas.getContext('2d')
+  if (!context) return null
+  context.fillStyle = '#000'
+  context.fillRect(0, 0, width, height)
+  if (clip.maskCanvas) {
+    context.setTransform(clip.documentToLayer ?? new DOMMatrix())
+    context.drawImage(clip.maskCanvas, 0, 0)
+    context.setTransform(new DOMMatrix())
+  } else {
+    context.setTransform(clip.layerToDocument)
+    context.fillStyle = '#fff'
+    clipToSelection(context, clip.selection, clip.canvasWidth, clip.canvasHeight)
+    context.fillRect(0, 0, clip.canvasWidth, clip.canvasHeight)
+    context.setTransform(new DOMMatrix())
+  }
+  const image = context.getImageData(0, 0, width, height)
+  const coverage = new Uint8ClampedArray(width * height)
+  for (let at = 0; at < coverage.length; at += 1) coverage[at] = image.data[at * 4]
+  return coverage
 }
 
 function unionDirty(
@@ -2799,6 +3068,9 @@ if (typeof window !== 'undefined') {
       get selection() {
         return selection.value
       },
+      get activeLayerId() {
+        return activeLayerId.value
+      },
       get rows() {
         return rows.value
       },
@@ -2818,6 +3090,12 @@ if (typeof window !== 'undefined') {
       loadMaskSelection,
       drawShape,
       drawGradient,
+      retouch,
+      beginRetouch,
+      moveRetouch,
+      endRetouch,
+      setCloneSource,
+      contentAwareFill,
       mergeDown,
       mergeLayers,
       resizeCanvas,
@@ -2834,6 +3112,8 @@ if (typeof window !== 'undefined') {
       expandSelection,
       contractSelection,
       magicWandAt,
+      marqueeSelection,
+      applySelectionMode,
       selectAll,
       deselect,
       invertSelection,

@@ -66,7 +66,8 @@
     "grid": "Grid",
     "gridLarger": "Grid: Larger",
     "gridSmaller": "Grid: Smaller",
-    "gridSubdivide": "Grid: Cycle subdivisions"
+    "gridSubdivide": "Grid: Cycle subdivisions",
+    "contentAwareFill": "Content-Aware Fill"
   },
   "tools": {
     "move": "Move",
@@ -91,7 +92,11 @@
     "options": "{tool} options",
     "notInBuild": "{tool} — not in this build yet",
     "swapColors": "Swap colours (X)",
-    "defaultColors": "Default colours (D)"
+    "defaultColors": "Default colours (D)",
+    "sharpen": "Sharpen",
+    "smudge": "Smudge",
+    "burn": "Burn",
+    "sponge": "Sponge"
   },
   "options": {
     "autoSelect": "Auto-Select",
@@ -133,7 +138,23 @@
     "shapeRectangle": "Rectangle",
     "shapeEllipse": "Ellipse",
     "fill": "Fill",
-    "stroke": "Stroke"
+    "stroke": "Stroke",
+    "strength": "Strength:",
+    "blurRadius": "Radius:",
+    "aligned": "Aligned",
+    "cloneSourceHint": "Alt-click to set the source",
+    "range": "Range:",
+    "exposure": "Exposure:",
+    "saturate": "Saturate",
+    "desaturate": "Desaturate",
+    "healContentAware": "Content-Aware",
+    "healCreateTexture": "Create Texture",
+    "healProximity": "Proximity Match",
+    "toneRange": {
+      "shadows": "Shadows",
+      "midtones": "Midtones",
+      "highlights": "Highlights"
+    }
   },
   "layers": {
     "title": "Layers",
@@ -240,7 +261,10 @@
     "copied": "Copied to the clipboard",
     "selectionEmpty": "That layer has no pixels to select.",
     "reloaded": "Reloaded after a change on disk",
-    "externalChangeKept": "That project changed on disk. Your unsaved edits were kept."
+    "externalChangeKept": "That project changed on disk. Your unsaved edits were kept.",
+    "cloneSource": "Alt-click where Clone Stamp should copy from first.",
+    "paintRefused": "This layer has no pixels to rework.",
+    "contentAwareNoSource": "Not enough unselected, opaque image pixels to synthesize a fill. Use a smaller selection with some surrounding image."
   },
   "error": {
     "invalid": "This is not a valid Compositor project, or its metadata is damaged.",

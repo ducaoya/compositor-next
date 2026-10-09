@@ -18,9 +18,13 @@ export type ToolId =
   | 'eraser'
   | 'heal'
   | 'clone'
-  | 'gradient'
   | 'blur'
+  | 'sharpen'
+  | 'smudge'
   | 'dodge'
+  | 'burn'
+  | 'sponge'
+  | 'gradient'
   | 'pen'
   | 'type'
   | 'shape'
@@ -141,7 +145,7 @@ export const TOOLS: ToolDefinition[] = [
     id: 'heal',
     labelKey: 'tools.heal',
     shortcut: 'J',
-    implemented: false,
+    implemented: true,
     icon: `
       <rect x="8.5" y="2.5" width="7" height="19" rx="3.5" transform="rotate(45 12 12)" />
       <path d="M9.4 9.4 14.6 14.6" />`,
@@ -150,7 +154,7 @@ export const TOOLS: ToolDefinition[] = [
     id: 'clone',
     labelKey: 'tools.clone',
     shortcut: 'S',
-    implemented: false,
+    implemented: true,
     icon: `
       <path d="M5.5 20.5h13" />
       <path d="M8 17.5h8v-3.2H8z" />
@@ -170,17 +174,66 @@ export const TOOLS: ToolDefinition[] = [
     id: 'blur',
     labelKey: 'tools.blur',
     shortcut: 'R',
-    implemented: false,
+    implemented: true,
+    variants: [
+      { id: 'blur', labelKey: 'tools.blur' },
+      { id: 'sharpen', labelKey: 'tools.sharpen' },
+      { id: 'smudge', labelKey: 'tools.smudge' },
+    ],
     icon: `<path d="M12 3s6.2 6.6 6.2 10.6a6.2 6.2 0 0 1-12.4 0C5.8 9.6 12 3 12 3z" />`,
+  },
+  {
+    id: 'sharpen',
+    labelKey: 'tools.sharpen',
+    shortcut: 'R',
+    implemented: true,
+    icon: `
+      <path d="M12 3 18.5 20.5h-13z" />
+      <path d="M12 9.5v7" />`,
+  },
+  {
+    id: 'smudge',
+    labelKey: 'tools.smudge',
+    shortcut: 'R',
+    implemented: true,
+    icon: `
+      <path d="M6.5 15.5c0-3 4-3.2 4-6.2 0-1.7 1.2-2.8 2.6-2.8 1.6 0 2.9 1.3 2.9 3.1" />
+      <path d="M16 9.6c2 0 3.5 1.6 3.5 3.9 0 3.9-3.4 7-7.7 7-3.9 0-7-2.6-7-5.8" />`,
   },
   {
     id: 'dodge',
     labelKey: 'tools.dodge',
     shortcut: 'O',
-    implemented: false,
+    implemented: true,
+    variants: [
+      { id: 'dodge', labelKey: 'tools.dodge' },
+      { id: 'burn', labelKey: 'tools.burn' },
+      { id: 'sponge', labelKey: 'tools.sponge' },
+    ],
     icon: `
       <circle cx="9.2" cy="9.2" r="5.2" />
       <path d="M12.9 12.9 21 21" />`,
+  },
+  {
+    id: 'burn',
+    labelKey: 'tools.burn',
+    shortcut: 'O',
+    implemented: true,
+    icon: `
+      <circle cx="9.2" cy="9.2" r="5.2" />
+      <circle cx="9.2" cy="9.2" r="2.4" fill="currentColor" stroke="none" />
+      <path d="M12.9 12.9 21 21" />`,
+  },
+  {
+    id: 'sponge',
+    labelKey: 'tools.sponge',
+    shortcut: 'O',
+    implemented: true,
+    icon: `
+      <path d="M3.5 9.5h17v6.2a2.8 2.8 0 0 1-2.8 2.8H6.3a2.8 2.8 0 0 1-2.8-2.8z" />
+      <path d="M6.5 5.5h11" />
+      <circle cx="9" cy="13.2" r="1.1" />
+      <circle cx="14.5" cy="14.8" r="1.1" />`,
   },
   {
     id: 'pen',
@@ -241,7 +294,36 @@ export const SHORTCUT_CYCLES: Record<string, ToolId[]> = TOOLS.reduce<Record<str
 )
 
 /** Tools that paint with the brush tip, and so read the brush options. */
-export const BRUSH_TOOLS: ReadonlySet<ToolId> = new Set<ToolId>(['brush', 'eraser'])
+export const BRUSH_TOOLS: ReadonlySet<ToolId> = new Set<ToolId>([
+  'brush',
+  'eraser',
+  'clone',
+  'blur',
+  'sharpen',
+  'smudge',
+  'dodge',
+  'burn',
+  'sponge',
+  'heal',
+])
+
+/**
+ * The tools that rework the pixels already there rather than painting a colour.
+ *
+ * They share the rail's brush tip and nothing else: each one needs the layer's own pixels at the
+ * stroke's start, so a stroke takes a sample and a dab writes a result, instead of stamping a tip.
+ * That is also why they refuse to work on a layer mask, where there is no colour to rework.
+ */
+export const RETOUCH_TOOLS: ReadonlySet<ToolId> = new Set<ToolId>([
+  'clone',
+  'blur',
+  'sharpen',
+  'smudge',
+  'dodge',
+  'burn',
+  'sponge',
+  'heal',
+])
 
 /** Tools that draw or edit a selection. */
 export const SELECTION_TOOLS: ReadonlySet<ToolId> = new Set<ToolId>([

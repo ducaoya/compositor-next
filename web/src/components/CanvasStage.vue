@@ -29,16 +29,22 @@ import {
   addLassoPoint,
   applyCrop,
   applySelectionMode,
+  beginRetouch,
   cancelLasso,
+  cloneSourcePoint,
   closeLasso,
   drawGradient,
   drawShape,
+  endRetouch,
   flushPaint,
   importDroppedFiles,
+  isRetouchTool,
   layerMatrix,
   layerPixelSize,
   marqueeSelection,
+  moveRetouch,
   panBy,
+  setCloneSource,
   setCropRect,
   pickColor,
   registerDropTarget,
@@ -171,6 +177,7 @@ type Drag =
   | { kind: 'gradient'; start: [number, number]; current: [number, number] }
   | { kind: 'shape'; start: [number, number]; current: [number, number] }
   | { kind: 'paint' }
+  | { kind: 'retouch' }
   | { kind: 'move'; layerId: string; startOrigin: [number, number]; startPointer: [number, number] }
   | {
       kind: 'transform'
@@ -348,11 +355,21 @@ const transformBox = computed(() => {
 })
 
 const brushCursor = computed(() => {
-  if (tool.value !== 'brush' && tool.value !== 'eraser') return null
+  // The size-based tools all draw their own outline, because a CSS cursor cannot be a circle the
+  // size of the tip. `cursorFor` returns `none` for exactly these, so the two have to agree.
+  if (tool.value !== 'brush' && tool.value !== 'eraser' && !isRetouchTool()) return null
   const point = pointer.value
   if (!point) return null
   const diameter = Math.max(4, brush.size * view.zoom)
   return { left: point[0], top: point[1], size: diameter }
+})
+
+/** Where Clone Stamp would copy from, for the canvas's crosshair. */
+const cloneSourceMark = computed(() => {
+  if (tool.value !== 'clone') return null
+  const source = cloneSourcePoint.value
+  if (!source) return null
+  return { left: source[0] * view.zoom + view.panX, top: source[1] * view.zoom + view.panY }
 })
 
 // MARK: - Pointer
@@ -392,6 +409,24 @@ function onPointerDown(event: PointerEvent): void {
     return
   }
 
+  // The retouch tools are a stroke of their own rather than a case in the switch below: their drag
+  // has no preview and no handles, and Clone's Alt means something none of the others have a use
+  // for. Alt-clicking with Clone picks the source instead of painting, which is Photoshop's
+  // Option-click; the stroke itself is a plain drag afterwards.
+  if (tool.value === 'clone' && event.altKey) {
+    setCloneSource(dx, dy)
+    schedule()
+    return
+  }
+  if (isRetouchTool()) {
+    // A stroke that cannot start — no source for Clone, a mask for anything — leaves the drag where
+    // it was, so the press does nothing rather than opening a stroke with nothing behind it.
+    if (beginRetouch(dx, dy, event.altKey)) drag = { kind: 'retouch' }
+    schedule()
+    return
+  }
+
+  // The retouch tools never reach here: every one of them returned above with a drag of its own.
   switch (tool.value) {
     case 'zoom':
       drag = { kind: 'zoom', out: event.altKey }
@@ -438,6 +473,15 @@ function onPointerDown(event: PointerEvent): void {
       drag = { kind: 'paint' }
       beginStroke(dx, dy)
       schedule()
+      return
+    case 'clone':
+    case 'heal':
+    case 'blur':
+    case 'sharpen':
+    case 'smudge':
+    case 'dodge':
+    case 'burn':
+    case 'sponge':
       return
     case 'eyedropper':
       pickColor(dx, dy)
@@ -536,6 +580,10 @@ function onPointerMove(event: PointerEvent): void {
       return
     case 'paint':
       extendStroke(dx, dy)
+      schedule()
+      return
+    case 'retouch':
+      moveRetouch(dx, dy)
       schedule()
       return
     case 'move': {
@@ -642,6 +690,9 @@ function onPointerUp(event: PointerEvent): void {
   switch (drag.kind) {
     case 'paint':
       endStroke()
+      break
+    case 'retouch':
+      endRetouch()
       break
     case 'marquee': {
       const drawn = marqueeSelection(drag.start, drag.current, drag.elliptical)
@@ -878,6 +929,13 @@ watch(
       }"
     />
 
+    <!-- Where Clone Stamp is copying from, which a stroke keeps until a new source is picked. -->
+    <div
+      v-if="cloneSourceMark"
+      class="stage__source"
+      :style="{ left: `${cloneSourceMark.left}px`, top: `${cloneSourceMark.top}px` }"
+    />
+
     <template v-if="showsRulers">
       <div class="ruler ruler--top">
         <span v-for="tick in horizontalTicks" :key="`t${tick.at}`" class="ruler__tick" :style="{ left: `${tick.at}px` }">
@@ -1084,6 +1142,39 @@ watch(
   transform: translate(-50%, -50%);
   box-shadow: 0 0 0 1px rgb(0 0 0 / 55%);
   pointer-events: none;
+}
+
+/* Clone Stamp's sample point: a small ring with a cross through it. */
+.stage__source {
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  border: 1px solid rgb(255 255 255 / 85%);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 55%);
+  pointer-events: none;
+}
+
+.stage__source::before,
+.stage__source::after {
+  position: absolute;
+  background: rgb(255 255 255 / 85%);
+  content: '';
+}
+
+.stage__source::before {
+  top: 5px;
+  left: -3px;
+  width: 17px;
+  height: 1px;
+}
+
+.stage__source::after {
+  top: -3px;
+  left: 5px;
+  width: 1px;
+  height: 17px;
 }
 
 .stage__dropping {
