@@ -97,6 +97,7 @@ import {
 } from '../render/retouchStroke'
 import {
   addNoise,
+  dither as ditherPixels,
   glow as glowPixels,
   lensDistort,
   tonalContrast,
@@ -2127,10 +2128,19 @@ export const filterSettings = reactive({
   lens: { distortion: 0 },
   noise: { amount: 12, gaussian: true, monochromatic: false },
   blur: { radius: 12 },
+  // Two levels and one decision per pixel is Photoshop's Bitmap diffusion: the newspaper halftone.
+  // The seed is drawn per run like Add Noise's, because a dither that repeats exactly is a texture.
+  dither: {
+    method: 'diffusion' as 'diffusion' | 'pattern' | 'noise',
+    levels: 2,
+    amount: 100,
+    serpentine: true,
+    monochromatic: true,
+  },
 })
 
 /** The filters a dialog can be opened for. Remove Background is not one of them yet. */
-export type FilterKind = 'vignette' | 'glow' | 'tonal' | 'lens' | 'noise' | 'blur'
+export type FilterKind = 'vignette' | 'glow' | 'tonal' | 'lens' | 'noise' | 'blur' | 'dither'
 
 /** Which filter's dialog is open, or null. */
 export const filterSheet = ref<FilterKind | null>(null)
@@ -2151,6 +2161,7 @@ const FILTER_LABELS: Record<FilterKind, string> = {
   lens: 'menu.lensCorrection',
   noise: 'menu.addNoise',
   blur: 'menu.gaussianBlur',
+  dither: 'menu.dither',
 }
 
 /**
@@ -2223,6 +2234,16 @@ export function applyFilter(kind: FilterKind): void {
       image.data.set(result.data)
       break
     }
+    case 'dither':
+      ditherPixels(source, {
+        method: filterSettings.dither.method,
+        levels: filterSettings.dither.levels,
+        amount: filterSettings.dither.amount,
+        serpentine: filterSettings.dither.serpentine,
+        monochromatic: filterSettings.dither.monochromatic,
+        seed: Math.floor(Math.random() * 0xffffffff) >>> 0,
+      })
+      break
   }
 
   const coverage = selectionCoverage(layer, surface.width, surface.height)
@@ -3786,6 +3807,7 @@ if (typeof window !== 'undefined') {
       selectTool,
       setForeground,
       nudgeActive,
+      toggleVisible,
       get lassoPoints() {
         return lassoPoints.value
       },

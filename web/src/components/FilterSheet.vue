@@ -49,6 +49,10 @@ const FIELDS: Record<FilterKind, Field[]> = {
     { key: 'amount', min: 0, max: 400, step: 1, suffix: '%' },
   ],
   blur: [{ key: 'radius', min: 0.1, max: 250, step: 0.1, suffix: 'px' }],
+  dither: [
+    { key: 'levels', min: 2, max: 64, step: 1 },
+    { key: 'amount', min: 0, max: 100, step: 1, suffix: '%' },
+  ],
 }
 
 const kind = computed(() => filterSheet.value)
@@ -98,6 +102,25 @@ function apply(): void {
             :step="field.step"
           />
           <output>{{ (block() as Record<string, number>)[field.key] }}{{ field.suffix ?? '' }}</output>
+        </label>
+
+        <label v-if="kind === 'dither'" class="sheet__field">
+          <span>{{ t('filters.method') }}</span>
+          <select v-model="filterSettings.dither.method">
+            <option value="diffusion">{{ t('filters.ditherDiffusion') }}</option>
+            <option value="pattern">{{ t('filters.ditherPattern') }}</option>
+            <option value="noise">{{ t('filters.ditherNoise') }}</option>
+          </select>
+          <output />
+        </label>
+
+        <label v-if="kind === 'dither'" class="sheet__check">
+          <input type="checkbox" v-model="filterSettings.dither.monochromatic" />
+          {{ t('adjust.monochromatic') }}
+        </label>
+        <label v-if="kind === 'dither' && filterSettings.dither.method === 'diffusion'" class="sheet__check">
+          <input type="checkbox" v-model="filterSettings.dither.serpentine" />
+          {{ t('filters.serpentine') }}
         </label>
 
         <label v-if="kind === 'vignette'" class="sheet__check">
@@ -179,6 +202,17 @@ function apply(): void {
   width: 100%;
   height: 4px;
   accent-color: #9a9a9a;
+}
+
+.sheet__field select {
+  width: 100%;
+  padding: 3px 5px;
+  border: 1px solid #3c3f46;
+  border-radius: 3px;
+  background: #1f2024;
+  color: #d6d9df;
+  font: inherit;
+  font-size: 11px;
 }
 
 .sheet__field output {

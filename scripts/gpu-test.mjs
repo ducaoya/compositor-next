@@ -1224,6 +1224,65 @@ const CASES = [
   },
 
   {
+    name: 'dither leaves two values and keeps the average',
+    // A filter over the whole layer, measured where nothing else draws: the background is a ramp, so
+    // a dither that works has to leave only the two ends in it *and* the mean where the ramp was.
+    // Thresholding would pass the first half of that and fail the second.
+    probe: `(async () => { ${PRELUDE}
+      const patchMean = (f, x0, y0, w, h) => {
+        let total = 0
+        for (let y = y0; y < y0 + h; y += 1) for (let x = x0; x < x0 + w; x += 1) {
+          const i = (y * f.width + x) * 4
+          total += 0.299 * f.data[i] + 0.587 * f.data[i + 1] + 0.114 * f.data[i + 2]
+        }
+        return total / (w * h)
+      }
+      const patchValues = (f, x0, y0, w, h) => {
+        const seen = new Set()
+        for (let y = y0; y < y0 + h; y += 1) for (let x = x0; x < x0 + w; x += 1) {
+          const i = (y * f.width + x) * 4
+          seen.add(f.data[i]); seen.add(f.data[i + 1]); seen.add(f.data[i + 2])
+        }
+        return [...seen].sort((a, b) => a - b)
+      }
+
+      const before = await freshDocument()
+      const background = s.manifest.layers[0]
+      // Everything above it is hidden, so what comes back is the layer the filter was applied to.
+      for (const layer of s.manifest.layers) {
+        if (layer.id !== background.id && layer.visible !== false) s.toggleVisible(layer.id)
+      }
+      await wait(600)
+      const clean = await s.renderAndRead()
+
+      s.selectLayer(background.id)
+      s.filterSettings.dither.method = 'diffusion'
+      s.filterSettings.dither.levels = 2
+      s.filterSettings.dither.amount = 100
+      s.filterSettings.dither.monochromatic = true
+      s.filterSettings.dither.serpentine = true
+      s.applyFilter('dither')
+      await wait(800)
+      const after = await s.renderAndRead()
+
+      const values = patchValues(after, 20, 20, 80, 80)
+      const meanBefore = patchMean(clean, 20, 20, 80, 80)
+      const meanAfter = patchMean(after, 20, 20, 80, 80)
+      return {
+        pass: values.length === 2 && values[0] === 0 && values[1] === 255
+          && Math.abs(meanAfter - meanBefore) < 12
+          && changed(clean, after) > 1000,
+        detail: {
+          values,
+          meanBefore: Math.round(meanBefore * 10) / 10,
+          meanAfter: Math.round(meanAfter * 10) / 10,
+          changed: changed(clean, after),
+        },
+      }
+    })()`,
+  },
+
+  {
     name: 'gaussian blur smooths',
     probe: `(async () => { ${PRELUDE}
       const r = await setup('Gaussian Blur', (a) => { a.blurRadius = 24 })

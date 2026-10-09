@@ -212,7 +212,7 @@ reference's `HealPixels.c` and `ContentFill.c`, membrane solve, patch search and
 blur and the unsharp mask, the smudge dab, Add Noise, and the dodge/burn/sponge tone curves. They are
 pure functions over typed arrays with no canvas and no GPU, so a 259-line C membrane solver is tested
 in a node process. `web/src/render/filters/` is the same idea for Vignette, Bloom, Tonal Contrast,
-Lens Correction and Noise.
+Lens Correction, Noise and Dither.
 
 `web/src/render/retouchStroke.ts` is the state machine around them, and one decision there decides
 how every one of these tools behaves: **the sample is taken when the stroke starts, not per dab.** A
@@ -222,6 +222,14 @@ a sample and composite it through the tip; Smudge and Spot Healing work on a cop
 pixels; Dodge, Burn and Sponge read, adjust and write back, because they *do* build up. Spot Healing
 accumulates coverage and heals once at the end, since healing dab by dab would have each dab looking
 at what the last one invented.
+
+Dither is the same shape of pure kernel, and one detail of it is worth keeping: the error a dither
+carries lives in **two row buffers**, not in a plane over the image. A full accumulator would be three
+floats a pixel — a 4,000 × 4,000 layer would want 192 MB to dither — and a pixel only ever hands
+error to its own row and the one below it, so two rows is all that has to exist. The monochromatic
+mode decides on luminance and puts *one* error back into all three planes; handing on each channel's
+own difference instead (which also looks right) drops the error that arrived and quietly turns the
+dither back into a threshold.
 
 ## The two downsamples, and the mip chains
 

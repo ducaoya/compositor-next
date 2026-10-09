@@ -294,6 +294,7 @@ const menus = computed<Menu[]>(() => [
       { label: t('menu.bloomGlow'), command: 'filter.glow', run: () => openFilterSheet('glow'), enabled: canFilter },
       { label: t('menu.tonalContrast'), command: 'filter.tonal', run: () => openFilterSheet('tonal'), enabled: canFilter },
       { label: t('menu.lensCorrection'), command: 'filter.lens', run: () => openFilterSheet('lens'), enabled: canFilter },
+      { label: t('menu.dither'), command: 'filter.dither', run: () => openFilterSheet('dither'), enabled: canFilter },
       { label: '' },
       // Camera Raw develops a RAW file, which is the importer's job rather than a filter's, and
       // Remove Background needs a model this build does not ship. Both say so rather than offering

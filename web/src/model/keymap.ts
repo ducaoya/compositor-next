@@ -69,6 +69,7 @@ export type CommandId =
   | 'filter.glow'
   | 'filter.tonal'
   | 'filter.lens'
+  | 'filter.dither'
   | 'view.zoomIn'
   | 'view.zoomOut'
   | 'view.palette'
@@ -164,6 +165,7 @@ const MENU_COMMANDS: readonly CommandDefinition[] = [
   { id: 'filter.glow', labelKey: 'menu.bloomGlow', group: 'filter', default: '' },
   { id: 'filter.tonal', labelKey: 'menu.tonalContrast', group: 'filter', default: '' },
   { id: 'filter.lens', labelKey: 'menu.lensCorrection', group: 'filter', default: '' },
+  { id: 'filter.dither', labelKey: 'menu.dither', group: 'filter', default: '' },
   { id: 'view.zoomIn', labelKey: 'menu.zoomIn', group: 'view', default: 'Ctrl++' },
   { id: 'view.zoomOut', labelKey: 'menu.zoomOut', group: 'view', default: 'Ctrl+-' },
   { id: 'view.palette', labelKey: 'menu.commandPalette', group: 'view', default: 'F' },

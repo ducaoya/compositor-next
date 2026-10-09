@@ -32,8 +32,9 @@ either editor opens in the other.
 - **Retouching** — Clone Stamp with an aligned source, Spot Healing Brush in its three modes, Blur,
   Sharpen and Smudge, Dodge, Burn and Sponge, and Content-Aware Fill. The healing, smudging, blurring
   and filling kernels are ports of the reference app's C, tested over typed arrays without a GPU.
-- **Filters** — Gaussian Blur, Add Noise, Vignette, Bloom / Glow, Tonal Contrast and Lens Correction,
-  each with its own settings dialog.
+- **Filters** — Gaussian Blur, Add Noise, Vignette, Bloom / Glow, Tonal Contrast, Lens Correction and
+  Dither (error diffusion, an 8×8 pattern or noise, at any number of levels per channel), each with
+  its own settings dialog.
 - **Importing** — anything the webview decodes, plus SVG (rasterised at its own size) and TIFF
   (uncompressed, PackBits, LZW and Deflate), and exporting a flattened PNG or JPEG.
 - **Hue/Saturation's colour-range bands** — the six ranges Photoshop has, each with its own hue,
@@ -97,19 +98,19 @@ complete. Tier 3 is partly done.
 |---|---|
 | **1 — the whole chain** | complete. `.comp` versions 1–11, 24 blend modes, painting, selections, import and export, undo throughout. |
 | **2 — everyday use** | complete but for the Type tool: layer and clipping masks, twelve adjustment layers, transforms with snapping and guides, the Magic Wand, gradients, shapes, six layer effects, drag-and-drop import. |
-| **3 — feature parity** | partial: Content-Aware Fill, Clone Stamp, Spot Healing, Smudge, Vignette, Bloom/Glow, Tonal Contrast, Lens Correction, a command palette, Hue/Saturation's colour-range bands, rulers and the pixel grid. |
+| **3 — feature parity** | partial: Content-Aware Fill, Clone Stamp, Spot Healing, Smudge, Vignette, Bloom/Glow, Tonal Contrast, Lens Correction, Dither, a command palette, remappable shortcuts, Hue/Saturation's colour-range bands, rulers and the pixel grid. |
 
 What is left of Tier 3 is [Not yet](#not-yet) and
 [What it will not open](#what-it-will-not-open-and-why): PSD and PSB, selecting a subject, the Type
-tool, Camera Raw, Remove Background, Liquify, Dither, shortcut remapping, and a shell thumbnail
-handler. Autosave and crash recovery, opening a project by double-clicking it, and the install half
-of updating are all here now, and are described above and in [Updating](#updating).
+tool, Camera Raw, Remove Background, Liquify, and a shell thumbnail handler. Autosave and crash
+recovery, opening a project by double-clicking it, the install half of updating, dithering and
+remappable shortcuts are all here now, and are described above and in [Updating](#updating).
 
 Four things are here that the plan did not call for, because the port turned out to need them: SVG
 and TIFF import, mip chains for both of the frame's downsamples, and the retouch tools beyond clone
 stamp and spot healing — Blur, Sharpen, Smudge, Dodge, Burn and Sponge.
 
-**Where it stands:** version 0.1.0, with 305 TypeScript tests, 43 Rust tests, and 26 pixel cases that
+**Where it stands:** version 0.1.0, with 319 TypeScript tests, 43 Rust tests, and 27 pixel cases that
 drive a real build in headless Chrome. `pnpm check` runs the first two; the pixel cases need a dev
 server and `scripts/dev-browser.mjs`, which [docs/architecture.md](docs/architecture.md) explains.
 
