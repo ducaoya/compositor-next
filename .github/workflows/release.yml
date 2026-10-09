@@ -2,7 +2,7 @@
 #
 # Three ways in, because a project this size wants all three:
 #
-#   - a push to `master` whose commit message contains `[release]`
+#   - a push to `master` whose commit subject starts with `[release]`
 #   - a version tag (`v0.2.0`), for the habit of tagging
 #   - the Actions tab, by hand (`workflow_dispatch`)
 #
@@ -16,7 +16,6 @@ on:
     branches: [master]
     tags: ['v*']
   workflow_dispatch:
-
 # Creating a release and uploading its assets writes to the repository.
 permissions:
   contents: write
@@ -28,11 +27,13 @@ concurrency:
 
 jobs:
   release:
-    # An ordinary commit publishes nothing: a push has to be a tag or say `[release]`.
+    # An ordinary commit publishes nothing, and the marker has to be the *first thing* in the commit
+    # subject — a `[release]` mentioned halfway down a message body (in a sentence about releases,
+    # say) is not a decision to publish anything.
     if: >-
       github.event_name == 'workflow_dispatch'
       || github.ref_type == 'tag'
-      || contains(github.event.head_commit.message, '[release]')
+      || startsWith(github.event.head_commit.message, '[release]')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

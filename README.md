@@ -281,13 +281,16 @@ A release is a commit message, a tag, or a button. All three run the same workfl
 
 | Trigger | What it is for |
 |---|---|
-| A push to `master` whose commit message contains `[release]` | The everyday path: the work is merged, and the commit that says so is the one that ships. |
+| A push to `master` whose commit subject starts with `[release]` | The everyday path: the work is merged, and the commit that says so is the one that ships. |
 | A tag pushed as `v0.2.0` | For the habit of tagging. The tag and the version in `src-tauri/tauri.conf.json` must agree. |
 | **Actions › Release › Run workflow** | Running a release again after a failure, without inventing a commit. |
 
 Before any of them, bump `version` in `src-tauri/tauri.conf.json`. That number is the tag, the name
 of the release, and the version the app reports to an update check — and a release that forgets to
 bump it fails with that sentence rather than quietly republishing the last one.
+
+The marker has to be the first thing in the commit subject. A `[release]` written halfway down a
+message body is a word, not a decision: nothing publishes from a commit that merely mentions it.
 
 What lands on the release page for `v<version>`:
 

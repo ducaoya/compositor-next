@@ -235,12 +235,15 @@ bug —— 记录在 [docs/architecture.md](docs/architecture.md)。
 
 | 触发方式 | 用途 |
 |---|---|
-| 推到 `master` 且提交信息里带 `[release]` | 日常路径：活儿已经合进 master，说“发吧”的那个提交就是要发的那个。 |
+| 推到 `master` 且提交信息**以** `[release]` 开头 | 日常路径：活儿已经合进 master，说“发吧”的那个提交就是要发的那个。 |
 | 推一个 `v0.2.0` 标签 | 给习惯打标签的人用。标签必须与 `src-tauri/tauri.conf.json` 里的版本一致。 |
 | **Actions › Release › Run workflow** | 发布失败后重跑，不用为了重跑再造一个提交。 |
 
 无论走哪种，先改 `src-tauri/tauri.conf.json` 里的 `version`。这个数字就是标签名、发布标题，以及
 应用向更新服务自报的版本 —— 忘了改的发布会直接失败并明说这句话，而不是默默把上一版重发一遍。
+
+标记必须是提交标题的**第一个词**。写在正文中间的 `[release]` 只是一个词、不是一次决定：仅仅提到它
+的提交不会发布任何东西。
 
 `v<version>` 发布页上会出现：
 
