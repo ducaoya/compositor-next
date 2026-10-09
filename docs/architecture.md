@@ -127,6 +127,19 @@ That is also why an arriving path is recognised by its extension rather than by 
 shell adds and the `\\?\` prefix Windows adds, and takes the first thing that ends in `.comp`. It is
 tested against the shapes a shell actually produces rather than the one shape a developer assumes.
 
+## A write of our own is not an outside change
+
+Saving swaps the package on disk, and the watcher reports that like any other write — so the app
+used to reload the document it had just saved a third of a second later, and take the undo history
+with it, because a reload clears the stack. `wroteAt` in `web/src/state/session.ts` is set as a
+package is written and checked as a watcher event is about to be acted on: a change this app made is
+not news.
+
+A recovered document that is saved names a folder it was not watching, so it re-arms its watch
+there. The watcher's id is the tab rather than the path, which is what makes that a replacement
+rather than a second watcher left behind on a folder that is about to be deleted — and closing a tab
+stops its watch for the same reason.
+
 ## The two halves of an update
 
 The decision half is TypeScript (`web/src/model/update.ts`): semver, including the two cases usually

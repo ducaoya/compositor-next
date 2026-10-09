@@ -238,6 +238,12 @@ bundle for this platform. Choosing it downloads the bundle, reports how far alon
 bar, verifies the signature and installs, then restarts into the new build. Nothing is replaced
 until someone asks for it.
 
+The updater refuses a plain-`http` endpoint, and a build that names one without admitting to it does
+not start at all — that is why `plugins.updater.dangerousInsecureTransportProtocol` is on beside the
+local default. A release points the endpoint at `https` and can drop the flag. The signature check
+is what protects the bundle either way: a manifest read over plain http can be swapped for one that
+offers an older release, but not for one whose contents will install.
+
 ### Installing: what a release needs
 
 The download, the signature check and the swap are wired up. Signing, however, needs keys, and they
@@ -251,9 +257,15 @@ are per-project, so this is what a release does with them:
 2. Publish the manifest above wherever `plugins.updater.endpoints` names, with one entry per
    platform and the bundle's `signature` beside its `url`.
 3. Build with the private key available: `TAURI_SIGNING_PRIVATE_KEY=… pnpm tauri build`. Tauri signs
-   each bundle and writes the signature into `bundle.createUpdaterArtifacts`, which is on — so
-   `pnpm tauri build` without the key fails rather than producing bundles that could never be
-   installed.
+   each bundle and writes a `.sig` file beside it, whose contents go into the manifest as that
+   platform's `signature`; `bundle.createUpdaterArtifacts` turns this on, so `pnpm tauri build`
+   without the key fails rather than producing bundles that could never be installed. The CLI does
+   not assemble the manifest itself — Tauri's `tauri-action` does that in CI, and by hand it is a
+   dozen lines of JSON.
+
+Both installers are built and both are signed, and the updater uses the NSIS one on Windows, which
+is the `.exe` under `windows-x86_64`. An update installed over the MSI route would use
+`windows-x86_64-msi` and the `.msi` beside it.
 
 Self-signed is deliberate while this is developed: a development build signed with its own key is a
 complete, verifiable path, and swapping in a real certificate later means generating the pair from

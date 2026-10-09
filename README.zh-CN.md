@@ -201,6 +201,11 @@ bug —— 记录在 [docs/architecture.md](docs/architecture.md)。
 检查发现存在适用于当前平台的安装包后，帮助菜单里会出现第二项**安装更新…**。选择它会下载安装包、
 在菜单栏里显示进度、校验签名并安装，然后重启进入新版本。没有人主动要求，就不会替换任何东西。
 
+更新器拒绝明文 `http` 地址；如果配置里写了这样的地址又没有明说，应用根本启动不了 —— 这就是本地
+默认地址旁边开着 `plugins.updater.dangerousInsecureTransportProtocol` 的原因。发布时把地址改成
+`https` 就可以去掉这个开关。真正保护安装包的始终是签名校验：用明文 http 读到的清单可以被换成一份
+提供旧版本的清单，但换不成能装上东西的清单。
+
 ### 安装：发布时需要做什么
 
 下载、签名校验与替换都已经接通。但签名需要密钥，而密钥是按项目生成的，所以发布时要做的就是：
@@ -211,8 +216,12 @@ bug —— 记录在 [docs/architecture.md](docs/architecture.md)。
 2. 把上面的清单发布到 `plugins.updater.endpoints` 指定的位置，每个平台一条，`url` 旁边写它的
    `signature`。
 3. 构建时提供私钥：`TAURI_SIGNING_PRIVATE_KEY=… pnpm tauri build`。Tauri 会为每个安装包签名，
-   并把签名写进 `bundle.createUpdaterArtifacts` —— 这一项是开着的，所以不提供密钥的
-   `pnpm tauri build` 会直接失败，而不是产出永远装不上的安装包。
+   并在旁边写出 `.sig` 文件，其内容就是清单里该平台的 `signature`；`bundle.createUpdaterArtifacts`
+   这一项是开着的，所以不提供密钥的 `pnpm tauri build` 会直接失败，而不是产出永远装不上的安装包。
+   清单本身不由 CLI 拼装 —— Tauri 的 `tauri-action` 会在 CI 里做，手工做也只是十几行 JSON。
+
+两种安装包都会构建并且都会被签名；Windows 上更新器用的是 NSIS 那个，也就是 `windows-x86_64`
+对应的 `.exe`。走 MSI 路线安装的更新则用 `windows-x86_64-msi` 和旁边的 `.msi`。
 
 开发阶段采用自签名是刻意的：用自己的密钥签名的开发构建就是一条完整、可验证的路径，之后换成正式
 证书只需用该机构生成密钥对并替换一个公钥。代码中没有任何地方假设这是开发密钥。

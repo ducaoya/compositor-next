@@ -212,6 +212,13 @@ interface DocumentRecord {
   origin: string
   /** The snapshot covering this document, empty when there is none. */
   snapshot: string
+  /**
+   * Whether this document is being read out of a snapshot rather than out of its own project.
+   *
+   * That decides where its work belongs: a recovered document has no path of its own to write to,
+   * only the project it came from — and a recovered document that never had one has neither.
+   */
+  recovered: boolean
 }
 
 /**
@@ -347,6 +354,7 @@ export async function closeDocument(id: string): Promise<void> {
   // A tab closed with unsaved changes keeps its snapshot: that snapshot *is* the work, and closing
   // a tab is not the same as saying the work can be thrown away. A clean tab has nothing to keep.
   if (!closing.dirty) await discardSnapshot(closing)
+  await stopWatching(closing)
   releaseDocument(closing)
   documents.value = documents.value.filter((item) => item.id !== id)
   touchDocuments()
@@ -354,6 +362,22 @@ export async function closeDocument(id: string): Promise<void> {
   const next = documents.value[index] ?? documents.value[index - 1] ?? null
   if (next) await restoreDocument(next)
   else clearDocument()
+}
+
+/**
+ * Stops the shell watching a closed document's folder.
+ *
+ * A watcher's lifetime is the map entry that holds it, so a tab that is closed has to say so or the
+ * watch outlives the document. Failures are not worth reporting: the next open re-arms it.
+ */
+async function stopWatching(record: DocumentRecord): Promise<void> {
+  if (!inShell() || !record.path) return
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('watch_project', { id: record.id, path: record.path, enabled: false })
+  } catch (error) {
+    console.warn('a closed document is still being watched', error)
+  }
 }
 
 /**
@@ -1011,11 +1035,23 @@ async function reloadFromDisk(): Promise<void> {
 
 let reloadTimer: ReturnType<typeof setTimeout> | null = null
 
+/**
+ * When this app last wrote a project itself.
+ *
+ * Saving swaps the package on disk, and the watcher reports that like any other write — so the app
+ * would reload the document it just saved, a third of a second later, and take the undo history
+ * with it. A write of our own is not an outside change.
+ */
+let wroteAt = 0
+
 /** A save touches a dozen files; one reload per dozen events is what this is for. */
 function scheduleReload(): void {
   if (reloadTimer) clearTimeout(reloadTimer)
   reloadTimer = setTimeout(() => {
     reloadTimer = null
+    // A reload clears the undo history. That is right for a change someone else made and wrong for
+    // the one this app just wrote, which is what the window is for.
+    if (Date.now() - wroteAt < 2_000) return
     void reloadFromDisk()
   }, 300)
 }
@@ -1040,7 +1076,14 @@ async function watchProject(): Promise<void> {
       const { listen } = await import('@tauri-apps/api/event')
       await listen('project:changed', () => scheduleReload())
     }
-    await invoke('watch_project', { id: opened.path, path: opened.path, enabled: true })
+    await invoke('watch_project', {
+      // The id is the tab, not the path: a recovered document that lands somewhere else when it is
+      // saved has to replace the watcher it had rather than leave one behind on a folder that is
+      // about to be deleted.
+      id: activeDocumentId.value ?? opened.path,
+      path: opened.path,
+      enabled: true,
+    })
   } catch (error) {
     // A project that cannot be watched still opens; it just will not notice outside changes.
     console.warn('this project cannot be watched', error)
@@ -1083,6 +1126,7 @@ async function adopt(
     dirty: Boolean(options.snapshot),
     origin: options.origin ?? '',
     snapshot: options.snapshot ?? '',
+    recovered: Boolean(options.snapshot),
   }
   documents.value = [...documents.value, record]
   touchDocuments()
@@ -1108,6 +1152,24 @@ export async function newProject(width: number, height: number): Promise<void> {
   })
 }
 
+/**
+ * Where a document's work belongs.
+ *
+ * The project's own path for a document that was opened from one. A recovered document is the
+ * exception: its path is the snapshot it is being read out of, which is not a place to write a
+ * project to, so the project it came from is the answer — and if it never had one, the answer is
+ * nothing at all, and the user is asked.
+ */
+function homeOf(record: DocumentRecord): string {
+  return record.recovered ? record.origin : record.path
+}
+
+/**
+ * Writes the document to disk.
+ *
+ * A recovered document writes back to the project it came from rather than into the snapshot it is
+ * being read out of; a recovered one that never had a project asks where to go.
+ */
 export async function saveProject(): Promise<void> {
   const current = manifest.value
   const opened = project.value
@@ -1122,7 +1184,7 @@ export async function saveProject(): Promise<void> {
     // Where this document goes: the project it came from when it came back from a snapshot, its
     // own path otherwise, or wherever the user says for a recovered document that never had one —
     // writing into the snapshot folder would leave the real project untouched.
-    let target = record?.origin || opened.path
+    let target = record ? homeOf(record) : opened.path
     if (!target) {
       const chosen = await client.chooseProjectPath(record ? documentName(record) : 'Untitled.comp')
       if (!chosen) return
@@ -1132,14 +1194,19 @@ export async function saveProject(): Promise<void> {
     // A recovered document opened the snapshot, whose assets are the snapshot's own files. Once the
     // work is back where it belongs those files are about to go, so the assets are re-read from the
     // project that now holds them; the pixels are already on the GPU and are not decoded twice.
-    project.value = target === opened.path ? written : await client.openProjectAt(target)
+    const moved = target !== opened.path
+    project.value = moved ? await client.openProjectAt(target) : written
     if (record) {
       record.path = project.value.path
       record.origin = ''
+      record.recovered = false
       record.dirty = false
       await discardSnapshot(record)
       touchDocuments()
     }
+    // Work that was recovered and has now landed somewhere else is watched at its new address, and
+    // the watcher it had — on a snapshot folder that is about to disappear — goes with this call.
+    if (moved) await watchProject()
     dirty.value = false
     // Nothing is outstanding, so the next edit is due a snapshot after the quiet time alone rather
     // than after the gap between two of them.
@@ -1168,6 +1235,7 @@ async function writePackage(
     const bytes = await paintStore.encode(layerId, surfaceKind === 'mask' ? 'mask' : 'image')
     if (bytes) pendingBytes.set(surfaceId, bytes)
   }
+  wroteAt = Date.now()
   const written = await client.saveProject({ ...opened, path: target }, current, pendingBytes)
   pendingBytes = new Map()
   return written
@@ -1221,9 +1289,10 @@ async function autosaveIfDue(): Promise<void> {
   try {
     const client = await backend()
     if (!client.writable) return
-    const target = await client.recovery.prepare(record.origin, record.id)
+    const home = homeOf(record)
+    const target = await client.recovery.prepare(home, record.id)
     await writePackage(client, target, opened, current)
-    await client.recovery.label(target, record.origin, record.id, documentName(record))
+    await client.recovery.label(target, home, record.id, documentName(record))
     record.snapshot = target
     autosavedAt = Date.now()
   } catch (error) {
@@ -1316,6 +1385,9 @@ export async function recoverSnapshot(entry: RecoveryEntry): Promise<void> {
     canRender.value = compositor.value !== null
     message.value = t('message.recovered', { name: recoveryLabel(entry) })
   })
+  // Off the offer, but not off the disk: the snapshot is the work until the work reaches its own
+  // file, and that is what saving discards it for.
+  dropEntry(entry.target)
 }
 
 /** Throws one snapshot away, because that work is not wanted back. */
