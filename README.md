@@ -120,7 +120,7 @@ Four things are here that the plan did not call for, because the port turned out
 and TIFF import, mip chains for both of the frame's downsamples, and the retouch tools beyond clone
 stamp and spot healing — Blur, Sharpen, Smudge, Dodge, Burn and Sponge.
 
-**Where it stands:** version 0.1.0, with 341 TypeScript tests, 43 Rust tests, and 31 pixel cases that
+**Where it stands:** version 0.1.0, with 341 TypeScript tests, 47 Rust tests, and 31 pixel cases that
 drive a real build in headless Chrome. `pnpm check` runs the first two; the pixel cases need a dev
 server and `scripts/dev-browser.mjs`, which [docs/architecture.md](docs/architecture.md) explains.
 

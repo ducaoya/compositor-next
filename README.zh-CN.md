@@ -95,7 +95,7 @@ Camera Raw、移除背景，以及外壳缩略图处理器。自动保存与崩�
 另有四项是方案没要求、但移植过程中发现必须要有的：SVG 与 TIFF 导入、画帧两次降采样的 mip 链，
 以及仿制图章与污点修复之外的修图工具 —— 模糊、锐化、涂抹、减淡、加深、海绵。
 
-**当前规模**：版本 0.1.0，341 个 TypeScript 单元测试、43 个 Rust 测试，以及 31 个在无头 Chrome 中
+**当前规模**：版本 0.1.0，341 个 TypeScript 单元测试、47 个 Rust 测试，以及 31 个在无头 Chrome 中
 驱动真实构建的像素用例。前两项由 `pnpm check` 运行；像素用例需要开发服务器与
 `scripts/dev-browser.mjs`，详见 [docs/architecture.md](docs/architecture.md)。
 
