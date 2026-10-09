@@ -94,6 +94,15 @@ import {
   type RetouchKind,
   type RetouchOptions,
 } from '../render/retouchStroke'
+import {
+  addNoise,
+  glow as glowPixels,
+  lensDistort,
+  tonalContrast,
+  vignette as vignettePixels,
+  type Rgba as FilterRgba,
+} from '../render/filters'
+import { blurred } from '../render/retouch'
 import { RETOUCH_TOOLS } from '../model/tools'
 import type { ToneRange } from '../render/retouch'
 import {
@@ -601,6 +610,11 @@ export function useSession() {
     cloneSourcePoint,
     setCloneSource,
     contentAwareFill,
+    filterSettings,
+    filterSheet,
+    openFilterSheet,
+    closeFilterSheet,
+    applyFilter,
     lassoPolygonal,
     lassoPoints,
     showsRulers,
@@ -1717,6 +1731,167 @@ export function contentAwareFill(): void {
   surface.dirty = unionDirty(surface.dirty, { x: 0, y: 0, width: surface.width, height: surface.height })
   if (history.isEditing) endEdit()
   schedulePaintFlush()
+}
+
+/**
+ * The whole-layer filters, and the settings their dialogs remember.
+ *
+ * Photoshop keeps one set of numbers per filter rather than per document, which is what makes
+ * reopening Vignette land on the shape you last used. The defaults are Photoshop's own starting
+ * points where it has one: a vignette that darkens, a glow that is subtle, Add Noise at 12%.
+ */
+export const filterSettings = reactive({
+  vignette: {
+    amount: -50,
+    midpoint: 50,
+    roundness: 0,
+    feather: 50,
+    highlights: 0,
+    colour: [0, 0, 0] as [number, number, number],
+  },
+  glow: { radius: 20, amount: 25 },
+  // All three tone amounts at zero is a filter that does nothing, which is a poor thing for a
+  // dialog to open on: Photoshop starts Tonal Contrast on the midtones.
+  tonal: { radius: 30, amount: 50, shadows: 0, midtones: 50, highlights: 0 },
+  lens: { distortion: 0 },
+  noise: { amount: 12, gaussian: true, monochromatic: false },
+  blur: { radius: 12 },
+})
+
+/** The filters a dialog can be opened for. Remove Background is not one of them yet. */
+export type FilterKind = 'vignette' | 'glow' | 'tonal' | 'lens' | 'noise' | 'blur'
+
+/** Which filter's dialog is open, or null. */
+export const filterSheet = ref<FilterKind | null>(null)
+
+export function openFilterSheet(kind: FilterKind): void {
+  filterSheet.value = kind
+}
+
+export function closeFilterSheet(): void {
+  filterSheet.value = null
+}
+
+/** The `.comp` manifest remembers filters by name, so the menu and the file agree on the words. */
+const FILTER_LABELS: Record<FilterKind, string> = {
+  vignette: 'menu.vignette',
+  glow: 'menu.bloomGlow',
+  tonal: 'menu.tonalContrast',
+  lens: 'menu.lensCorrection',
+  noise: 'menu.addNoise',
+  blur: 'menu.gaussianBlur',
+}
+
+/**
+ * Runs a filter over the active layer, once, as one undo step.
+ *
+ * The whole layer is read, changed and written back rather than a stroke's worth: every one of
+ * these looks at the image as a whole — a vignette needs the frame, tonal contrast needs a blur of
+ * the lot, and the lens warp samples from anywhere — so there is nothing to limit the work to.
+ *
+ * A selection limits what is *kept*, not what is computed: the filter runs over the layer and the
+ * result is blended back by the selection's coverage, which is how a soft selection gets a soft
+ * edge rather than a hard one.
+ */
+export function applyFilter(kind: FilterKind): void {
+  const layer = paintableLayer()
+  if (!layer) return
+  const surface = ensureSurface(layer, 'image')
+  const image = surface.context.getImageData(0, 0, surface.width, surface.height)
+  const source: FilterRgba = { data: image.data, width: surface.width, height: surface.height }
+  const original = new Uint8ClampedArray(image.data)
+
+  switch (kind) {
+    case 'vignette': {
+      const frame = documentFrameInLayer(layer, surface.width, surface.height)
+      vignettePixels(source, frame, {
+        amount: filterSettings.vignette.amount,
+        midpoint: filterSettings.vignette.midpoint,
+        roundness: filterSettings.vignette.roundness,
+        feather: filterSettings.vignette.feather,
+        highlights: filterSettings.vignette.highlights,
+        colour: [...filterSettings.vignette.colour] as [number, number, number],
+      })
+      break
+    }
+    case 'glow': {
+      const result = glowPixels(source, filterSettings.glow.radius, filterSettings.glow.amount / 50)
+      image.data.set(result.data)
+      break
+    }
+    case 'tonal': {
+      const base = blurred(source, filterSettings.tonal.radius)
+      tonalContrast(source, { data: base.data, width: surface.width, height: surface.height }, {
+        amount: filterSettings.tonal.amount,
+        shadows: filterSettings.tonal.shadows,
+        midtones: filterSettings.tonal.midtones,
+        highlights: filterSettings.tonal.highlights,
+      })
+      break
+    }
+    case 'lens': {
+      const destination: FilterRgba = {
+        data: new Uint8ClampedArray(image.data.length),
+        width: surface.width,
+        height: surface.height,
+      }
+      lensDistort(source, destination, filterSettings.lens.distortion / 100)
+      image.data.set(destination.data)
+      break
+    }
+    case 'noise':
+      addNoise(source, {
+        amount: filterSettings.noise.amount,
+        gaussian: filterSettings.noise.gaussian,
+        monochromatic: filterSettings.noise.monochromatic,
+        seed: Math.floor(Math.random() * 0xffffffff) >>> 0,
+      })
+      break
+    case 'blur': {
+      const result = blurred(source, filterSettings.blur.radius)
+      image.data.set(result.data)
+      break
+    }
+  }
+
+  const coverage = selectionCoverage(layer, surface.width, surface.height)
+  if (coverage) {
+    for (let at = 0; at < coverage.length; at += 1) {
+      const amount = coverage[at] / 255
+      if (amount >= 1) continue
+      for (let channel = 0; channel < 4; channel += 1) {
+        const index = at * 4 + channel
+        image.data[index] = original[index] + (image.data[index] - original[index]) * amount
+      }
+    }
+  }
+
+  history.begin(t(FILTER_LABELS[kind]), manifest.value!)
+  if (!layer.imageFile) layer.imageFile = doc.imageFileName(layer.id)
+  layerImages.set(layer.id, { width: surface.width, height: surface.height })
+  modifiedSurfaces.add(assetKey(layer.id, 'image'))
+  surface.context.putImageData(image, 0, 0)
+  surface.dirty = unionDirty(surface.dirty, { x: 0, y: 0, width: surface.width, height: surface.height })
+  endEdit()
+  schedulePaintFlush()
+}
+
+/**
+ * The document's rectangle in a layer's own pixels, which is the frame a vignette is shaped on.
+ *
+ * A layer can be smaller than the document, or land off-centre, and Photoshop shades the corners of
+ * the *canvas*: mapping the document's corners through the layer's matrix is what puts the vignette
+ * where the eye expects it rather than around whatever the layer happens to be.
+ */
+function documentFrameInLayer(layer: LayerRecord, width: number, height: number): { x: number; y: number; width: number; height: number } {
+  const current = manifest.value
+  if (!current) return { x: 0, y: 0, width, height }
+  const inverse = layerMatrix(layer).inverse()
+  const topLeft = inverse.transformPoint(new DOMPoint(0, 0))
+  const bottomRight = inverse.transformPoint(new DOMPoint(current.width, current.height))
+  const x = Math.min(topLeft.x, bottomRight.x)
+  const y = Math.min(topLeft.y, bottomRight.y)
+  return { x, y, width: Math.abs(bottomRight.x - topLeft.x), height: Math.abs(bottomRight.y - topLeft.y) }
 }
 
 /**
@@ -3096,6 +3271,10 @@ if (typeof window !== 'undefined') {
       endRetouch,
       setCloneSource,
       contentAwareFill,
+      filterSettings,
+      openFilterSheet,
+      closeFilterSheet,
+      applyFilter,
       mergeDown,
       mergeLayers,
       resizeCanvas,

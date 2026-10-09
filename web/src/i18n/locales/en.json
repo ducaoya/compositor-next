@@ -67,7 +67,12 @@
     "gridLarger": "Grid: Larger",
     "gridSmaller": "Grid: Smaller",
     "gridSubdivide": "Grid: Cycle subdivisions",
-    "contentAwareFill": "Content-Aware Fill"
+    "contentAwareFill": "Content-Aware Fill",
+    "vignette": "Vignette…",
+    "bloomGlow": "Bloom / Glow…",
+    "tonalContrast": "Tonal Contrast…",
+    "lensCorrection": "Lens Correction…",
+    "removeBackground": "Remove Background"
   },
   "tools": {
     "move": "Move",
@@ -501,5 +506,31 @@
     "placeholder": "Type a command…",
     "empty": "No command matches.",
     "hint": "↑↓ to choose, Return to run"
+  },
+  "filters": {
+    "vignette": "Vignette",
+    "vignetteNote": "Shades the frame's corners, measured on the canvas rather than on the layer.",
+    "glow": "Bloom / Glow",
+    "glowNote": "Blurs the highlights and adds them back.",
+    "tonal": "Tonal Contrast",
+    "tonalNote": "Local contrast against a blurred copy, weighted by tone.",
+    "lens": "Lens Correction",
+    "lensNote": "Radial distortion. Positive k pulls samples inward and straightens barrel distortion.",
+    "noise": "Add Noise",
+    "noiseNote": "Uniform or Gaussian grain, from the position and the seed.",
+    "blur": "Gaussian Blur",
+    "blurNote": "A separable Gaussian over the whole layer.",
+    "amount": "Amount",
+    "midpoint": "Midpoint",
+    "roundness": "Roundness",
+    "feather": "Feather",
+    "highlights": "Highlights",
+    "shadows": "Shadows",
+    "midtones": "Midtones",
+    "radius": "Radius",
+    "distortion": "Distortion",
+    "lightenCorners": "Lighten the corners instead",
+    "gaussianNoise": "Gaussian",
+    "wholeLayer": "With no selection, the filter runs over the whole layer."
   }
 }

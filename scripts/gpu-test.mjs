@@ -814,6 +814,168 @@ const CASES = [
   },
 
   {
+    name: 'vignette shades the corners',
+    probe: `(async () => { ${PRELUDE}
+      const corner = { x: 24, y: 24, width: 80, height: 80 }
+      const centre = { x: 440, y: 280, width: 80, height: 80 }
+
+      const off = await baseFrame()
+      s.filterSettings.vignette = { amount: 0, midpoint: 50, roundness: 0, feather: 50, highlights: 0, colour: [0, 0, 0] }
+      s.applyFilter('vignette')
+      await wait(500)
+      const untouched = await s.renderAndRead()
+
+      const before = await baseFrame()
+      const cornerBefore = rectLuma(before, corner)
+      const centreBefore = rectLuma(before, centre)
+      s.filterSettings.vignette = { amount: -80, midpoint: 50, roundness: 0, feather: 50, highlights: 0, colour: [0, 0, 0] }
+      s.applyFilter('vignette')
+      await wait(500)
+      const after = await s.renderAndRead()
+      const cornerAfter = rectLuma(after, corner)
+      const centreAfter = rectLuma(after, centre)
+
+      return {
+        pass: changed(off, untouched) === 0
+          && cornerAfter < cornerBefore - 15
+          && Math.abs(centreAfter - centreBefore) < 4,
+        detail: {
+          amount0ChangedPixels: changed(off, untouched),
+          corner: { before: Math.round(cornerBefore * 10) / 10, after: Math.round(cornerAfter * 10) / 10 },
+          centre: { before: Math.round(centreBefore * 10) / 10, after: Math.round(centreAfter * 10) / 10 },
+        },
+      }
+    })()`,
+  },
+  {
+    name: 'glow brightens the highlights',
+    probe: `(async () => { ${PRELUDE}
+      const off = await baseFrame()
+      const { rect } = roughestRect(off, 40)
+      const bright = { x: 600, y: 320, width: 120, height: 120 }
+
+      s.filterSettings.glow = { radius: 40, amount: 0 }
+      s.applyFilter('glow')
+      await wait(500)
+      const untouched = await s.renderAndRead()
+
+      const before = await baseFrame()
+      const brightBefore = rectLuma(before, bright)
+      const wholeBefore = rectLuma(before, { x: 0, y: 0, width: before.width, height: before.height })
+      s.filterSettings.glow = { radius: 40, amount: 60 }
+      s.applyFilter('glow')
+      await wait(500)
+      const after = await s.renderAndRead()
+      const brightAfter = rectLuma(after, bright)
+      const wholeAfter = rectLuma(after, { x: 0, y: 0, width: after.width, height: after.height })
+
+      return {
+        pass: changed(off, untouched) === 0
+          && brightAfter > brightBefore + 2
+          && wholeAfter > wholeBefore,
+        detail: {
+          amount0ChangedPixels: changed(off, untouched),
+          bright: { before: Math.round(brightBefore * 10) / 10, after: Math.round(brightAfter * 10) / 10 },
+          whole: { before: Math.round(wholeBefore * 10) / 10, after: Math.round(wholeAfter * 10) / 10 },
+          changed: changed(before, after),
+          roughnessUsed: rect.x,
+        },
+      }
+    })()`,
+  },
+  {
+    name: 'tonal contrast raises local contrast',
+    probe: `(async () => { ${PRELUDE}
+      const off = await baseFrame()
+      s.filterSettings.tonal = { radius: 30, amount: 0, shadows: 0, midtones: 100, highlights: 0 }
+      s.applyFilter('tonal')
+      await wait(500)
+      const untouched = await s.renderAndRead()
+
+      const before = await baseFrame()
+      const { rect, score } = roughestRect(before, 40)
+      s.filterSettings.tonal = { radius: 30, amount: 100, shadows: 0, midtones: 100, highlights: 0 }
+      s.applyFilter('tonal')
+      await wait(500)
+      const after = await s.renderAndRead()
+      const sharper = rectRoughness(after, rect)
+      return {
+        pass: changed(off, untouched) === 0 && sharper > score * 1.1,
+        detail: {
+          amount0ChangedPixels: changed(off, untouched),
+          roughnessBefore: Math.round(score * 100) / 100,
+          roughnessAfter: Math.round(sharper * 100) / 100,
+          changed: changed(before, after),
+        },
+      }
+    })()`,
+  },
+  {
+    name: 'lens correction bends the frame, not the middle',
+    probe: `(async () => { ${PRELUDE}
+      const off = await baseFrame()
+      s.filterSettings.lens = { distortion: 0 }
+      s.applyFilter('lens')
+      await wait(500)
+      const untouched = await s.renderAndRead()
+
+      const before = await baseFrame()
+      const middle = [Math.floor(before.width / 2), Math.floor(before.height / 2)]
+      const middleBefore = at(before, middle[0], middle[1])
+      // The distortion pushes samples outwards, so the corners are where the frame is rewritten.
+      s.filterSettings.lens = { distortion: 60 }
+      s.applyFilter('lens')
+      await wait(500)
+      const after = await s.renderAndRead()
+      const middleAfter = at(after, middle[0], middle[1])
+      const corner = { x: 8, y: 8, width: 40, height: 40 }
+      return {
+        pass: changed(off, untouched) === 0
+          && changed(before, after) > 20000
+          && middleBefore.join() === middleAfter.join()
+          && changedInside(before, after, corner) > 0,
+        detail: {
+          distortion0ChangedPixels: changed(off, untouched),
+          changedByTheWarp: changed(before, after),
+          middle: { at: middle, before: middleBefore, after: middleAfter },
+          cornerChanged: changedInside(before, after, corner),
+        },
+      }
+    })()`,
+  },
+  {
+    name: 'add noise roughens a flat field without shifting it',
+    probe: `(async () => { ${PRELUDE}
+      const off = await baseFrame()
+      s.filterSettings.noise = { amount: 0, gaussian: true, monochromatic: false }
+      s.applyFilter('noise')
+      await wait(500)
+      const untouched = await s.renderAndRead()
+
+      const before = await baseFrame()
+      const { rect, score } = flattestRect(before, 64)
+      const meanBefore = rectColour(before, rect)
+      s.filterSettings.noise = { amount: 40, gaussian: true, monochromatic: false }
+      s.applyFilter('noise')
+      await wait(500)
+      const after = await s.renderAndRead()
+      const meanAfter = rectColour(after, rect)
+      const rough = rectRoughness(after, rect)
+      return {
+        pass: changed(off, untouched) === 0
+          && rough > score + 4
+          && colourDistance(meanBefore, meanAfter) < 6,
+        detail: {
+          amount0ChangedPixels: changed(off, untouched),
+          flatRoughness: { before: Math.round(score * 100) / 100, after: Math.round(rough * 100) / 100 },
+          mean: { before: meanBefore.map((value) => Math.round(value)), after: meanAfter.map((value) => Math.round(value)) },
+          changed: changed(before, after),
+        },
+      }
+    })()`,
+  },
+
+  {
     name: 'gaussian blur smooths',
     probe: `(async () => { ${PRELUDE}
       const r = await setup('Gaussian Blur', (a) => { a.blurRadius = 24 })

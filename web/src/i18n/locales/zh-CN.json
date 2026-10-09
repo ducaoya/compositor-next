@@ -67,7 +67,12 @@
     "gridLarger": "网格：放大间距",
     "gridSmaller": "网格：缩小间距",
     "gridSubdivide": "网格：切换细分",
-    "contentAwareFill": "内容识别填充"
+    "contentAwareFill": "内容识别填充",
+    "vignette": "暗角…",
+    "bloomGlow": "辉光…",
+    "tonalContrast": "色调对比…",
+    "lensCorrection": "镜头校正…",
+    "removeBackground": "移除背景"
   },
   "tools": {
     "move": "移动",
@@ -501,5 +506,31 @@
     "placeholder": "输入命令…",
     "empty": "没有匹配的命令。",
     "hint": "↑↓ 选择，回车执行"
+  },
+  "filters": {
+    "vignette": "暗角",
+    "vignetteNote": "压暗画面四角，以画布而非图层为基准。",
+    "glow": "辉光",
+    "glowNote": "模糊高光后再叠加回去。",
+    "tonal": "色调对比",
+    "tonalNote": "与模糊副本做局部对比，并按色调加权。",
+    "lens": "镜头校正",
+    "lensNote": "径向畸变。正值向内取样，可校正桶形畸变。",
+    "noise": "添加杂色",
+    "noiseNote": "根据位置与随机种子生成均匀或高斯颗粒。",
+    "blur": "高斯模糊",
+    "blurNote": "整层做可分离高斯模糊。",
+    "amount": "数量",
+    "midpoint": "中点",
+    "roundness": "圆度",
+    "feather": "羽化",
+    "highlights": "高光",
+    "shadows": "阴影",
+    "midtones": "中间调",
+    "radius": "半径",
+    "distortion": "畸变",
+    "lightenCorners": "改为提亮四角",
+    "gaussianNoise": "高斯分布",
+    "wholeLayer": "未建立选区时，滤镜作用于整个图层。"
   }
 }

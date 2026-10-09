@@ -17,6 +17,7 @@ import DimensionSheet from './components/DimensionSheet.vue'
 import DocumentTabs from './components/DocumentTabs.vue'
 import CommandPalette, { type Command } from './components/CommandPalette.vue'
 import EffectsSheet from './components/EffectsSheet.vue'
+import FilterSheet from './components/FilterSheet.vue'
 import SelectionAmountSheet from './components/SelectionAmountSheet.vue'
 import OptionsBar from './components/OptionsBar.vue'
 import PropertiesPanel from './components/PropertiesPanel.vue'
@@ -46,6 +47,7 @@ import {
   flipCanvas,
   installLanguagePack,
   openEffectsSheet,
+  openFilterSheet,
   invertSelection,
   loadLanguagePacks,
   moveActive,
@@ -111,6 +113,14 @@ interface Menu {
 }
 
 const openMenu = ref<number | null>(null)
+
+/**
+ * Whether a filter can run: it needs a layer that has pixels to work on.
+ *
+ * A folder and an adjustment layer hold none, and a filter over a mask would be a filter over
+ * coverage rather than colour, which is the mask menu's business.
+ */
+const canFilter = (): boolean => activeLayer.value?.imageFile !== undefined
 
 /**
  * The menu, rebuilt whenever the language changes.
@@ -232,9 +242,19 @@ const menus = computed<Menu[]>(() => [
   {
     label: t('menu.filter'),
     items: [
-      { label: t('menu.gaussianBlur'), enabled: () => false },
-      { label: t('menu.addNoise'), enabled: () => false },
+      { label: t('menu.gaussianBlur'), run: () => openFilterSheet('blur'), enabled: canFilter },
+      { label: t('menu.addNoise'), run: () => openFilterSheet('noise'), enabled: canFilter },
+      { label: '' },
+      { label: t('menu.vignette'), run: () => openFilterSheet('vignette'), enabled: canFilter },
+      { label: t('menu.bloomGlow'), run: () => openFilterSheet('glow'), enabled: canFilter },
+      { label: t('menu.tonalContrast'), run: () => openFilterSheet('tonal'), enabled: canFilter },
+      { label: t('menu.lensCorrection'), run: () => openFilterSheet('lens'), enabled: canFilter },
+      { label: '' },
+      // Camera Raw develops a RAW file, which is the importer's job rather than a filter's, and
+      // Remove Background needs a model this build does not ship. Both say so rather than offering
+      // a dialog that cannot work.
       { label: t('menu.cameraRaw'), enabled: () => false },
+      { label: t('menu.removeBackground'), enabled: () => false },
     ],
   },
   {
@@ -462,6 +482,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown))
     <SelectionAmountSheet />
     <DimensionSheet />
     <EffectsSheet />
+    <FilterSheet />
     <CommandPalette :commands="commands" />
   </div>
 </template>
