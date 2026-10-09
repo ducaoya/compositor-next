@@ -63,6 +63,27 @@ const PRELUDE = `
     }
     return total / 576
   }
+  /**
+   * The first \`count\` pixels whose hue passes \`test\`, sampled on a grid.
+   *
+   * A colour-range case has to know where its colours are, and hand-picked coordinates were wrong:
+   * the old "blues" were magenta, so the case measured the wrong pixels and reported a working
+   * feature as broken. Finding them by hue means the case states its own precondition instead of
+   * trusting a coordinate nobody re-checked.
+   */
+  const findByHue = (f, test, count, minSaturation) => {
+    const found = []
+    for (let y = 0; y < f.height; y += 3) {
+      for (let x = 0; x < f.width; x += 3) {
+        if (saturation(f, x, y) < (minSaturation ?? 0.3)) continue
+        if (!test(hueOf(f, x, y))) continue
+        found.push([x, y])
+        if (found.length >= count) return found
+      }
+    }
+    return found
+  }
+  const same = (f, g, [x, y]) => at(f, x, y).join() === at(g, x, y).join()
 
   /**
    * Adds an adjustment above the topmost layer.
@@ -159,21 +180,68 @@ const CASES = [
   },
   {
     name: 'a colour range moves only its own hues',
-    // The whole point of the bands: blues move, reds do not, and "do not" means byte-identical
-    // rather than merely close.
+    // The whole point of the bands: one family of colours moves, the rest of the frame is
+    // byte-identical, and the master covers everything. The pixels are found by hue and the case
+    // checks it found some, because a range test with no pixels of that range in it proves nothing
+    // whichever way it reports.
+    //
+    // The fixture is a magenta-and-pink composition with a dark blue underneath: its magentas sit
+    // at 292…308, on the magentas band's plateau, and its blues at 226…254, which the magentas band
+    // — 255…345 with its falloff — does not reach at all. Those are the two families this measures.
+    // The case reports the coverage it found rather than assuming a coordinate, because the earlier
+    // version of it measured magenta pixels it had called blue and reported a working feature broken.
     probe: `(async () => { ${PRELUDE}
-      const r = await setup('Hue/Saturation', (a) => {
-        a.hsvSettings = { hue: 0, saturation: 0, lightness: 0, colorize: false, adjustments: { blues: { hue: 60 } } }
-      })
-      if (r.error) return { pass: false, detail: r }
-      const blues = [[120, 200], [180, 260], [240, 320]]
-      const reds = [[600, 420], [700, 480], [820, 520]]
-      const blueMoved = blues.filter(([x, y]) => at(r.before, x, y).join() !== at(r.after, x, y).join()).length
-      const redStill = reds.filter(([x, y]) => at(r.before, x, y).join() === at(r.after, x, y).join()).length
+      const before = await freshDocument()
+      const magentas = findByHue(before, (h) => h >= 292 && h <= 308, 8, 0.12)
+      const blues = findByHue(before, (h) => h >= 226 && h <= 254, 8, 0.12)
+      if (magentas.length < 4 || blues.length < 4) {
+        return { pass: false, detail: { error: 'the fixture has neither magentas nor blues to measure', magentas, blues } }
+      }
+      const added = await addAtTop('Hue/Saturation')
+      if (!added || !added.adjustment) return { pass: false, detail: { error: 'the adjustment was not added' } }
+
+      // One range, nothing else: the magentas rotate and the blues do not move at all.
+      added.adjustment.hsvSettings = { hue: 0, saturation: 0, lightness: 0, colorize: false, adjustments: { magentas: { hue: 60 } } }
+      await wait(600)
+      const ranged = await s.renderAndRead()
+      const moved = magentas.filter((p) => !same(before, ranged, p)).length
+      const untouched = blues.filter((p) => same(before, ranged, p)).length
+      const rotations = magentas.slice(0, 3).map((p) => ({
+        at: p,
+        before: at(before, p[0], p[1]),
+        after: at(ranged, p[0], p[1]),
+        rotated: Math.round((hueOf(ranged, p[0], p[1]) - hueOf(before, p[0], p[1]) + 360) % 360),
+      }))
+
+      // The master claims every hue, so the blues move too.
+      added.adjustment.hsvSettings = { hue: 60, saturation: 0, lightness: 0, colorize: false }
+      await wait(600)
+      const mastered = await s.renderAndRead()
+      const masteredBlues = blues.filter((p) => !same(before, mastered, p)).length
+
+      // An empty table is nothing at all, so the frame has to come back byte for byte — the
+      // strongest statement the encoder can make, and the one the old half-byte offset broke.
+      added.adjustment.hsvSettings = { hue: 0, saturation: 0, lightness: 0, colorize: false }
+      await wait(600)
+      const restored = await s.renderAndRead()
+      const restoredChanged = changed(before, restored)
+
       return {
-        pass: r.precondition && blueMoved >= 2 && redStill === reds.length,
-        detail: { precondition: r.precondition, changed: changed(r.before, r.after), blueMoved, redUnchanged: redStill, ofReds: reds.length,
-          sample: { before: at(r.before, 180, 260), after: at(r.after, 180, 260) } },
+        pass: moved === magentas.length
+          && untouched === blues.length
+          && rotations.every((point) => Math.abs(point.rotated - 60) <= 6)
+          && masteredBlues === blues.length
+          && restoredChanged === 0,
+        detail: {
+          ofMagentas: magentas.length,
+          moved,
+          ofBlues: blues.length,
+          untouched,
+          bluesAfterTheMaster: masteredBlues,
+          changedByTheRange: changed(before, ranged),
+          pixelsChangedAfterTheTableWasEmptied: restoredChanged,
+          rotations,
+        },
       }
     })()`,
   },

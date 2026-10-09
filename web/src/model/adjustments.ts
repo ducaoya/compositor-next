@@ -352,9 +352,9 @@ export function bandWeight(band: HueBand, hue: number): number {
 
 /** One range's adjustment, as the manifest holds it. */
 export interface RangeAdjustment {
-  hue: number
-  saturation: number
-  lightness: number
+  hue?: number
+  saturation?: number
+  lightness?: number
 }
 
 function rangeAdjustments(adjustment: LayerAdjustment): Partial<Record<ColorRange, RangeAdjustment>> {
@@ -394,20 +394,42 @@ export function buildHueResponse(adjustment: LayerAdjustment): Uint8Array {
     let lightness = 0
     for (const range of COLOR_RANGES) {
       const each = adjustments[range]
-      if (!each || (each.hue === 0 && each.saturation === 0 && each.lightness === 0)) continue
+      if (!each) continue
+      // A range the caller set only one slider on holds `undefined` for the other two, and
+      // `undefined * weight` is NaN — which packs to byte 0, which decodes as -100: a hue-only
+      // shift silently drove saturation and lightness to nothing and rendered the band black.
+      const hueShift = each.hue ?? 0
+      const saturationAmount = each.saturation ?? 0
+      const lightnessAmount = each.lightness ?? 0
+      if (hueShift === 0 && saturationAmount === 0 && lightnessAmount === 0) continue
       const weight = bandWeight(bands[range], hue)
       if (weight === 0) continue
-      shift += each.hue * weight
-      saturation += each.saturation * weight
-      lightness += each.lightness * weight
+      shift += hueShift * weight
+      saturation += saturationAmount * weight
+      lightness += lightnessAmount * weight
     }
-    // Packed into bytes the shader can unpack: a shift of ±180, and ±100 for the other two.
-    out[hue * 4] = Math.round(Math.min(1, Math.max(0, (shift + 180) / 360)) * 255)
-    out[hue * 4 + 1] = Math.round(Math.min(1, Math.max(0, (saturation + 100) / 200)) * 255)
-    out[hue * 4 + 2] = Math.round(Math.min(1, Math.max(0, (lightness + 100) / 200)) * 255)
+    // Packed into bytes the shader can unpack, centred on 128 so that *nothing* is exactly nothing:
+    // the old `(value + 180) / 360` mapping put neutral at 127.5, which no byte can hold, so an
+    // untouched hue came back as a 0.7-degree rotation and one point of saturation — enough to shift
+    // every pixel of the frame by a byte and make "only blues move" false.
+    // `responseAt` in `hueBands.test.ts` is the other half of this contract.
+    out[hue * 4] = packResponseByte(shift, 180)
+    out[hue * 4 + 1] = packResponseByte(saturation, 100)
+    out[hue * 4 + 2] = packResponseByte(lightness, 100)
     out[hue * 4 + 3] = 255
   }
   return out
+}
+
+/**
+ * A response value as a byte: zero at 128, full scale at 255 and 0.
+ *
+ * The shader reads it back as `(byte - 128) * limit / 127`, so the two are inverses and a neutral
+ * entry round-trips to exactly 0.0 rather than to a fraction of a degree.
+ */
+function packResponseByte(value: number, limit: number): number {
+  const clamped = Math.min(limit, Math.max(-limit, value))
+  return Math.min(255, Math.max(0, 128 + Math.round((clamped / limit) * 127)))
 }
 
 /** Whether the adjustment needs a response table at all, which is only Hue/Saturation. */

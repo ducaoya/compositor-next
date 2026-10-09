@@ -239,7 +239,8 @@ fn adjust_color(c: vec3f, pixel: vec2f, uv: vec2f) -> vec3f {
 
   switch kind {
     // 0. Hue/Saturation
-    case 0u: {      var hsl = rgb_to_hsl(c);
+    case 0u: {
+      var hsl = rgb_to_hsl(c);
       if (adjust.p1.w > 0.5) {
         hsl = vec3f(adjust.p2.x, clamp(adjust.p2.y / 100.0, 0.0, 1.0), hsl.z);
         let amount = clamp(adjust.p2.z / 100.0, -1.0, 1.0);
@@ -247,10 +248,22 @@ fn adjust_color(c: vec3f, pixel: vec2f, uv: vec2f) -> vec3f {
       } else {
         // The response for this pixel's own hue: the six colour ranges summed, each weighted by how
         // strongly it claims that hue. The CPU baked the table, the same shape the reference builds.
-        let response = textureLoad(lutTex, vec2i(clamp(i32(hsl.x + 0.5), 0, 359), 0), 0);
-        let shift = response.r / 255.0 * 360.0 - 180.0;
-        let saturation = response.g / 255.0 * 200.0 - 100.0;
-        let lightness = response.b / 255.0 * 200.0 - 100.0;
+        // The table is `rgba8unorm`, so a fetch is already normalised to 0…1 and `response * 255`
+        // recovers the byte the CPU wrote. Zero sits at byte 128 and full scale at byte 255, so
+        // "nothing" decodes to exactly 0.0 — the previous `response.r / 255.0` read every entry as
+        // if it were zero (an identity table became a 180-degree shift with saturation and
+        // lightness both driven to nothing, which is what turned the canvas black), and the
+        // `±180 over the whole byte` mapping before that put neutral at a half-byte no byte can
+        // hold, which moved every pixel by a byte even when no band claimed its hue.
+        let response = textureLoad(lutTex, vec2i(clamp(i32(hsl.x + 0.5), 0, 359), 0), 0) * 255.0;
+        let shift = (response.r - 128.0) * (180.0 / 127.0);
+        let saturation = (response.g - 128.0) * (100.0 / 127.0);
+        let lightness = (response.b - 128.0) * (100.0 / 127.0);
+        // No band claims this hue: hand back the pixel itself, so "only blues move" means
+        // byte-identical rather than a round trip through HSL that lands a byte away.
+        if (shift == 0.0 && saturation == 0.0 && lightness == 0.0) {
+          return c;
+        }
         hsl.x = (hsl.x + shift) - floor((hsl.x + shift) / 360.0) * 360.0;
         hsl.y = adjusted_saturation(hsl.y, saturation);
         let amount = clamp(lightness / 100.0, -1.0, 1.0);
