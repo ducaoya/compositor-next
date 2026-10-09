@@ -132,7 +132,7 @@ The other scripts:
 |---|---|
 | `pnpm check` | Every Rust and TypeScript test |
 | `pnpm build` | The frontend bundle |
-| `pnpm tauri build` | A desktop bundle to install. Needs `TAURI_SIGNING_PRIVATE_KEY` set, because the bundles are signed for the updater either way — see [Updating](#updating). |
+| `pnpm tauri build` | A desktop bundle to install. Unsigned, and it needs no key: signing is a release concern — see [Releasing](#releasing). |
 | `node scripts/make-sample-comp.mjs` | Regenerates `examples/sample.comp` |
 | `node scripts/dev-browser.mjs` | Headless Chrome with WebGPU, for scripted interface checks |
 
@@ -253,15 +253,18 @@ are per-project, so this is what a release does with them:
    private key private — it is what makes an update installable — and put the **public** key in
    `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`. A development key is already there: it
    is the one generated while wiring this up, and it is why a locally built bundle can be installed
-   over a locally built one.
+   over a locally built one. In a team the private half lives in CI rather than on a laptop, which
+   is what [Releasing](#releasing) is about.
 2. Publish the manifest above wherever `plugins.updater.endpoints` names, with one entry per
-   platform and the bundle's `signature` beside its `url`.
-3. Build with the private key available: `TAURI_SIGNING_PRIVATE_KEY=… pnpm tauri build`. Tauri signs
-   each bundle and writes a `.sig` file beside it, whose contents go into the manifest as that
-   platform's `signature`; `bundle.createUpdaterArtifacts` turns this on, so `pnpm tauri build`
-   without the key fails rather than producing bundles that could never be installed. The CLI does
-   not assemble the manifest itself — Tauri's `tauri-action` does that in CI, and by hand it is a
-   dozen lines of JSON.
+   platform and the bundle's `signature` beside its `url`. A published build points that endpoint at
+   the release page; a development build points it at a file on the developer's machine.
+3. Build with the private key available: `TAURI_SIGNING_PRIVATE_KEY=… pnpm tauri build --config
+   src-tauri/tauri.release.conf.json`. Tauri signs each bundle and writes a `.sig` file beside it,
+   whose contents go into the manifest as that platform's `signature`;
+   `bundle.createUpdaterArtifacts` turns this on — and it is in the release configuration overlay,
+   not the base one, which is why a developer's `pnpm tauri build` produces installers and nothing
+   that needs signing. The CLI does not assemble the manifest itself; the release workflow does, and
+   by hand it is a dozen lines of JSON.
 
 Both installers are built and both are signed, and the updater uses the NSIS one on Windows, which
 is the `.exe` under `windows-x86_64`. An update installed over the MSI route would use
@@ -270,6 +273,57 @@ is the `.exe` under `windows-x86_64`. An update installed over the MSI route wou
 Self-signed is deliberate while this is developed: a development build signed with its own key is a
 complete, verifiable path, and swapping in a real certificate later means generating the pair from
 that authority and replacing one public key. Nothing in the code assumes the development key.
+
+## Releasing
+
+A release is a commit message, a tag, or a button. All three run the same workflow
+(`.github/workflows/release.yml`), and all three do the same four things: test, build, sign, publish.
+
+| Trigger | What it is for |
+|---|---|
+| A push to `master` whose commit message contains `[release]` | The everyday path: the work is merged, and the commit that says so is the one that ships. |
+| A tag pushed as `v0.2.0` | For the habit of tagging. The tag and the version in `src-tauri/tauri.conf.json` must agree. |
+| **Actions › Release › Run workflow** | Running a release again after a failure, without inventing a commit. |
+
+Before any of them, bump `version` in `src-tauri/tauri.conf.json`. That number is the tag, the name
+of the release, and the version the app reports to an update check — and a release that forgets to
+bump it fails with that sentence rather than quietly republishing the last one.
+
+What lands on the release page for `v<version>`:
+
+- the two installers, `Compositor_<version>_x64-setup.exe` and `Compositor_<version>_x64_en-US.msi`;
+- a `.sig` beside each, which is the signature the app checks a download against;
+- `latest.json`, the manifest **Help › Check for Updates** and **Install Update** read, which a
+  published build names as
+  `https://github.com/ducaoya/compositor-next/releases/latest/download/latest.json`.
+
+The same bundles are attached to the workflow run itself as well, so a build can be looked at
+without being installed.
+
+### The signing key, and where it lives
+
+The private key is a repository secret — `TAURI_SIGNING_PRIVATE_KEY`, and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` when the key has a password. It is not on a developer's machine
+and not in a checkout, which is the point: nobody has to be trusted with it, no laptop can leak it,
+and a colleague leaving changes nothing about how releases work. `.gitignore` carries `*.key` so a
+copy cannot be committed by accident.
+
+Two consequences are worth knowing:
+
+- **A local build needs no key.** The updater artifacts are configured in
+  `src-tauri/tauri.release.conf.json`, and only CI passes that file (`--config`), so
+  `pnpm tauri build` on a developer's machine produces installers and nothing to sign.
+- **Losing the private key is not recoverable.** An installed copy accepts updates only from the key
+  compiled into it, so a lost key means every existing install has to be replaced by hand. Keep a
+  copy in a password manager or a vault, and change keys by publishing a version signed with the old
+  key that carries the new public key — the only way to move a key for software already out there.
+
+Set the secret once, from the key generated while wiring this up:
+
+```sh
+gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/compositor.key
+gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --body "…"   # only if the key has a password
+```
 
 ### Unsaved work, and what a crash costs
 

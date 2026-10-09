@@ -1,12 +1,16 @@
 # Dependencies
 node_modules
-
 # Build output
 dist
 target
 web/dist
 
 # Cargo.lock is deliberately committed: this is an application, not a library.
+
+# Signing keys. The private half of the updater key belongs in CI as a secret and in a backup, never
+# in a checkout; this is what stops a developer's copy from being committed by accident.
+*.key
+*.key.pub
 
 # Editor and OS
 .vscode/*

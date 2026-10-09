@@ -1,0 +1,121 @@
+# A release: tested, built, signed and published from the one place that holds the signing key.
+#
+# Three ways in, because a project this size wants all three:
+#
+#   - a push to `master` whose commit message contains `[release]`
+#   - a version tag (`v0.2.0`), for the habit of tagging
+#   - the Actions tab, by hand (`workflow_dispatch`)
+#
+# The signing key is a repository secret, so no developer's machine needs it and nobody has to be
+# trusted with it: see "Releasing" in the README. Nothing here runs for an ordinary push, and
+# nothing here runs for a pull request — a fork must never be able to reach the key.
+name: Release
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  workflow_dispatch:
+
+# Creating a release and uploading its assets writes to the repository.
+permissions:
+  contents: write
+
+# Two releases at once would race for the same tag and the same assets.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # An ordinary commit publishes nothing: a push has to be a tag or say `[release]`.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || github.ref_type == 'tag'
+      || contains(github.event.head_commit.message, '[release]')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # The dependency builds are the slow part of this job, and they only change when the
+      # lockfiles do.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install the frontend
+        run: pnpm install --frozen-lockfile
+
+      # `cargo test` builds the app crate, and the app crate embeds the built frontend — so the
+      # bundle has to exist before the tests can even be compiled.
+      - name: Build the frontend
+        run: pnpm build
+
+      # The gate. A release that cannot pass its own tests is not a release.
+      - name: Every test
+        run: pnpm check
+
+      # The version in `tauri.conf.json` is what names the tag, so a release that forgets to bump it
+      # would either collide with the last release or publish under the wrong number. Both are
+      # cheaper to catch here than to explain afterwards.
+      - name: The version and the tag have to agree
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            if [ "v$version" != "${{ github.ref_name }}" ]; then
+              echo "::error::this tag is ${{ github.ref_name }}, but tauri.conf.json says v$version"
+              exit 1
+            fi
+          elif git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "::error::v$version is already released — bump the version in src-tauri/tauri.conf.json first"
+            exit 1
+          fi
+          echo "releasing v$version"
+
+      # The release half of the configuration: the updater artifacts, and the endpoint a published
+      # build reads. A local build gets neither of those, which is why a local build needs no key.
+      - name: Build, sign and publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          args: --config src-tauri/tauri.release.conf.json
+          tagName: v__VERSION__
+          releaseName: 'Compositor v__VERSION__'
+          releaseBody: |
+            Built from ${{ github.sha }}.
+
+            `Compositor_*_x64-setup.exe` and `Compositor_*_x64_en-US.msi` are the installers, each
+            with a `.sig` beside it, and `latest.json` is the manifest **Help › Check for Updates**
+            and **Help › Install Update** read.
+          includeUpdaterJson: true
+          releaseDraft: false
+          prerelease: false
+
+      # The same bundles on the run's own page, for anyone debugging a build rather than installing
+      # one.
+      - name: Keep the bundles on the run
+        uses: actions/upload-artifact@v4
+        with:
+          name: compositor-bundles
+          if-no-files-found: error
+          path: |
+            target/release/bundle/nsis/*.exe
+            target/release/bundle/nsis/*.sig
+            target/release/bundle/msi/*.msi
+            target/release/bundle/msi/*.sig

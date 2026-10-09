@@ -111,7 +111,7 @@ pnpm dev
 |---|---|
 | `pnpm check` | 运行全部 Rust 与 TypeScript 测试 |
 | `pnpm build` | 构建前端产物 |
-| `pnpm tauri build` | 打包出可安装的桌面安装包。需要设置 `TAURI_SIGNING_PRIVATE_KEY`，因为安装包无论如何都要为更新器签名 —— 见[更新](#更新)。 |
+| `pnpm tauri build` | 打包出可安装的桌面安装包。不签名，也不需要密钥：签名属于发布环节 —— 见[发布](#发布)。 |
 | `node scripts/make-sample-comp.mjs` | 重新生成 `examples/sample.comp` |
 | `node scripts/dev-browser.mjs` | 后台静默的 headless Chrome + WebGPU，用于脚本化界面验证 |
 
@@ -213,18 +213,66 @@ bug —— 记录在 [docs/architecture.md](docs/architecture.md)。
 1. 生成一次密钥对：`pnpm tauri signer generate -w ~/.tauri/compositor.key`。私钥保密 —— 它决定了
    更新能不能装 —— 把**公钥**填到 `src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey`。
    仓库里已经有开发密钥：就是接通这一步时生成的那对，也是本地构建的包能覆盖本地构建的包的原因。
+   多人协作时私钥放在 CI 而不是某台笔记本上，详见[发布](#发布)。
 2. 把上面的清单发布到 `plugins.updater.endpoints` 指定的位置，每个平台一条，`url` 旁边写它的
-   `signature`。
-3. 构建时提供私钥：`TAURI_SIGNING_PRIVATE_KEY=… pnpm tauri build`。Tauri 会为每个安装包签名，
-   并在旁边写出 `.sig` 文件，其内容就是清单里该平台的 `signature`；`bundle.createUpdaterArtifacts`
-   这一项是开着的，所以不提供密钥的 `pnpm tauri build` 会直接失败，而不是产出永远装不上的安装包。
-   清单本身不由 CLI 拼装 —— Tauri 的 `tauri-action` 会在 CI 里做，手工做也只是十几行 JSON。
+   `signature`。发布出去的应用把这个地址指向发布页；开发构建则指向开发者本机的一个文件。
+3. 构建时提供私钥：`TAURI_SIGNING_PRIVATE_KEY=… pnpm tauri build --config
+   src-tauri/tauri.release.conf.json`。Tauri 会为每个安装包签名，并在旁边写出 `.sig` 文件，其内容
+   就是清单里该平台的 `signature`；`bundle.createUpdaterArtifacts` 这一项在**发布用的配置叠加
+   文件**里而非基础配置里，所以开发者的 `pnpm tauri build` 只产出安装包、不需要签任何东西。
+   清单本身不由 CLI 拼装 —— 发布流程会生成它，手工做也只是十几行 JSON。
 
 两种安装包都会构建并且都会被签名；Windows 上更新器用的是 NSIS 那个，也就是 `windows-x86_64`
 对应的 `.exe`。走 MSI 路线安装的更新则用 `windows-x86_64-msi` 和旁边的 `.msi`。
 
 开发阶段采用自签名是刻意的：用自己的密钥签名的开发构建就是一条完整、可验证的路径，之后换成正式
 证书只需用该机构生成密钥对并替换一个公钥。代码中没有任何地方假设这是开发密钥。
+
+## 发布
+
+一次发布可能是一个提交信息、一个标签，或一个按钮。三者跑的是同一个 workflow
+（`.github/workflows/release.yml`），做的也都是四件事：测试、构建、签名、发布。
+
+| 触发方式 | 用途 |
+|---|---|
+| 推到 `master` 且提交信息里带 `[release]` | 日常路径：活儿已经合进 master，说“发吧”的那个提交就是要发的那个。 |
+| 推一个 `v0.2.0` 标签 | 给习惯打标签的人用。标签必须与 `src-tauri/tauri.conf.json` 里的版本一致。 |
+| **Actions › Release › Run workflow** | 发布失败后重跑，不用为了重跑再造一个提交。 |
+
+无论走哪种，先改 `src-tauri/tauri.conf.json` 里的 `version`。这个数字就是标签名、发布标题，以及
+应用向更新服务自报的版本 —— 忘了改的发布会直接失败并明说这句话，而不是默默把上一版重发一遍。
+
+`v<version>` 发布页上会出现：
+
+- 两个安装包：`Compositor_<version>_x64-setup.exe` 与 `Compositor_<version>_x64_en-US.msi`；
+- 每个安装包旁边的 `.sig`，也就是应用校验下载时用的签名；
+- `latest.json` —— **帮助 › 检查更新**与**安装更新**读的那份清单；发布出去的应用把它指到
+  `https://github.com/ducaoya/compositor-next/releases/latest/download/latest.json`。
+
+同一批产物也会附在这次 workflow 运行的页面上，方便有人只是想看构建结果而不是安装它。
+
+### 签名密钥，以及它放在哪
+
+私钥是仓库 secret —— `TAURI_SIGNING_PRIVATE_KEY`，密钥带密码时再加
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。它既不在开发者的机器上，也不在任何 checkout 里，这正是
+重点：不需要信任某个人，任何一台笔记本泄露都不影响，同事离职也不改变发布方式。`.gitignore` 里加了
+`*.key`，避免副本被误提交。
+
+两个后果值得知道：
+
+- **本地构建不需要任何密钥。** 更新产物配置在 `src-tauri/tauri.release.conf.json` 里，只有 CI 会
+  传这个文件（`--config`），所以开发者机器上的 `pnpm tauri build` 只产出安装包、没有任何东西
+  需要签名。
+- **私钥丢了不可恢复。** 已安装的副本只接受由它内置公钥对应的私钥签出的更新，所以丢了私钥就等于
+  所有已安装的版本都得手动换掉。请把副本放进密码库或保险柜；换钥匙只能靠发布一个“用旧钥签名、
+  内置新公钥”的版本 —— 对于已经发出去的软件，这是唯一的换钥办法。
+
+从接通这一步时生成的那把钥匙设置 secret：
+
+```sh
+gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/compositor.key
+gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --body "…"   # 仅在密钥带密码时需要
+```
 
 ### 未保存的改动，与一次崩溃的代价
 

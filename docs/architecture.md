@@ -156,6 +156,13 @@ The consequence is that the manifest is named twice: `plugins.updater.endpoints`
 compiled in, and `updateEndpoint` for the check. They have to agree. The check's answer is a report;
 the installer's is the truth.
 
+The private key is the other reason the two halves are split. It is a repository secret, used by the
+release workflow and nothing else; the updater artifacts it produces are turned on by
+`src-tauri/tauri.release.conf.json`, which only CI passes with `--config`. That file also points the
+endpoint at the release page, so a published build looks for updates in a different place than a
+development one — and a developer's `pnpm tauri build` needs no key at all, which is what stops one
+person's machine from being part of the release process.
+
 ## GPU failures are silent by default
 
 `Compositor.create` reads the shader's compilation info and wraps pipeline creation in a validation
