@@ -112,9 +112,14 @@ complete. Tier 3 is partly done.
 
 What is left of Tier 3 is [Not yet](#not-yet) and
 [What it will not open](#what-it-will-not-open-and-why): PSD and PSB, selecting a subject, the Type
-tool, Camera Raw, Remove Background, and a shell thumbnail handler. Autosave and crash recovery,
-opening a project by double-clicking it, the install half of updating, dithering, remappable
-shortcuts and Liquify are all here now, and are described above and in [Updating](#updating).
+tool, Camera Raw, Remove Background, and the shell's half of the thumbnail. Autosave and crash
+recovery, opening a project by double-clicking it, the install half of updating, dithering,
+remappable shortcuts and Liquify are all here now, and are described above and in
+[Updating](#updating).
+
+**[docs/remaining-work.md](docs/remaining-work.md)** is the ledger: what each of those needs, what is
+implemented but not yet proven, what is waiting on a decision, and what is deliberately not being
+done.
 
 Four things are here that the plan did not call for, because the port turned out to need them: SVG
 and TIFF import, mip chains for both of the frame's downsamples, and the retouch tools beyond clone
@@ -202,6 +207,10 @@ the only way a project graded in this editor and opened in the other stays right
 
 **A string** is one key in `web/src/i18n/locales/en.json` and one in `zh-CN.json`. A test enforces
 that the two cover exactly the same keys with exactly the same placeholders.
+
+**An icon** is `src-tauri/icons/app-icon.svg` and one command — `pnpm tauri icon
+src-tauri/icons/app-icon.svg` — which redraws every size the bundles need, and an Android and an iOS
+set that a desktop build deletes.
 
 **An import format** is a branch in `web/src/io/imports.ts`: either a decoder (as TIFF and SVG have)
 or a refusal with a reason. `refusalFor` is where a format this build will not open is named, and
